@@ -1,47 +1,45 @@
 "use client";
 
 import Link from "next/link";
-
 import { useRouter } from "next/navigation";
-
-import {
-  useLanguage,
-} from "../context/LanguageContext";
+import { supabase } from "@/app/lib/supabase";
+import { useLanguage } from "../context/LanguageContext";
+import { translations } from "@/app/lib/translations";
 
 export default function Navbar() {
   const router = useRouter();
 
-  const {
-    language,
-    setLanguage,
-  } = useLanguage();
+  const { language, setLanguage } = useLanguage();
+
+  const text =
+    translations[
+      language as keyof typeof translations
+    ];
+
+  const logout = async () => {
+    await supabase.auth.signOut();
+    router.push("/login");
+  };
 
   return (
     <nav
       style={{
         background: "#008037",
-
-        padding: "15px 20px",
-
+        padding: "16px 30px",
         display: "flex",
-
-        justifyContent:
-          "space-between",
-
+        justifyContent: "space-between",
         alignItems: "center",
-
         flexWrap: "wrap",
-
-        gap: "15px",
+        gap: "20px",
+        boxShadow:
+          "0 4px 15px rgba(0,0,0,0.08)",
       }}
     >
       {/* LEFT */}
       <div
         style={{
           display: "flex",
-
           alignItems: "center",
-
           gap: "20px",
         }}
       >
@@ -49,16 +47,15 @@ export default function Navbar() {
           onClick={() => router.back()}
           style={backButton}
         >
-          ← Back
+          ← {text.back}
         </button>
 
         <h1
           style={{
             color: "white",
-
             margin: 0,
-
-            fontSize: "28px",
+            fontSize: "32px",
+            fontWeight: "bold",
           }}
         >
           NdakoCare
@@ -69,62 +66,56 @@ export default function Navbar() {
       <div
         style={{
           display: "flex",
-
           alignItems: "center",
-
-          gap: "15px",
-
+          gap: "18px",
           flexWrap: "wrap",
         }}
       >
-        <Link
-          href="/dashboard"
-          style={linkStyle}
-        >
-          Dashboard
+        <Link href="/dashboard" style={linkStyle}>
+          {text.dashboard}
         </Link>
 
-        <Link
-          href="/grocery"
-          style={linkStyle}
-        >
-          Grocery
+        <Link href="/grocery" style={linkStyle}>
+          {text.grocery}
         </Link>
 
-        <Link
-          href="/my-orders"
-          style={linkStyle}
-        >
-          My Orders
+        <Link href="/recharge" style={linkStyle}>
+          {text.recharge}
         </Link>
 
-        <Link
-          href="/profile"
-          style={linkStyle}
-        >
-          Profile
+        <Link href="/my-orders" style={linkStyle}>
+          {text.orders}
+        </Link>
+
+        <Link href="/my-recharges" style={linkStyle}>
+          {text.recharges}
+        </Link>
+
+        <Link href="/profile" style={linkStyle}>
+          {text.profile}
         </Link>
 
         <select
           value={language}
           onChange={(e) =>
-            setLanguage(
-              e.target.value
-            )
+            setLanguage(e.target.value)
           }
           style={selectStyle}
         >
           <option value="en">
-            English
+            🇺🇸 EN
           </option>
 
           <option value="fr">
-            Français
+            🇫🇷 FR
           </option>
         </select>
 
-        <button style={logoutButton}>
-          Logout
+        <button
+          onClick={logout}
+          style={logoutButton}
+        >
+          {text.logout}
         </button>
       </div>
     </nav>
@@ -133,56 +124,38 @@ export default function Navbar() {
 
 const linkStyle = {
   color: "white",
-
   textDecoration: "none",
-
-  fontWeight: "bold",
-
+  fontWeight: "bold" as const,
   fontSize: "16px",
 };
 
 const backButton = {
   background: "white",
-
   color: "#008037",
-
   border: "none",
-
-  padding: "10px 14px",
-
+  padding: "10px 15px",
   borderRadius: "10px",
-
   cursor: "pointer",
-
-  fontWeight: "bold",
-
+  fontWeight: "bold" as const,
   fontSize: "15px",
 };
 
 const selectStyle = {
-  padding: "10px",
-
+  padding: "10px 12px",
   borderRadius: "10px",
-
   border: "1px solid white",
-
-  fontSize: "16px",
+  fontSize: "15px",
+  cursor: "pointer",
+  background: "white",
 };
 
 const logoutButton = {
   background: "white",
-
   color: "#008037",
-
   border: "none",
-
   padding: "12px 18px",
-
   borderRadius: "10px",
-
   cursor: "pointer",
-
-  fontWeight: "bold",
-
-  fontSize: "18px",
+  fontWeight: "bold" as const,
+  fontSize: "16px",
 };

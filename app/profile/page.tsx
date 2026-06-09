@@ -2,12 +2,29 @@
 
 import { useEffect, useState } from "react";
 import Navbar from "../components/Navbar";
-import { supabase } from "@/lib/supabase";
+import { supabase } from "../lib/supabase";
+import { translations } from "../lib/translations";
+import { useLanguage } from "../context/LanguageContext";
+
+import {
+  FaUser,
+  FaPhone,
+  FaGlobe,
+  FaSave,
+} from "react-icons/fa";
 
 export default function ProfilePage() {
+  const { language } = useLanguage();
+
+  const text =
+    translations[
+      language as keyof typeof translations
+    ];
+
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
   const [country, setCountry] = useState("");
+  const [email, setEmail] = useState("");
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -28,19 +45,15 @@ export default function ProfilePage() {
 
     const user = session.user;
 
+    setEmail(user.email || "");
+
     const { data, error } = await supabase
       .from("profiles")
       .select("*")
       .eq("id", user.id)
       .single();
 
-    if (error) {
-      console.log(error.message);
-      setLoading(false);
-      return;
-    }
-
-    if (data) {
+    if (!error && data) {
       setFullName(data.full_name || "");
       setPhone(data.phone || "");
       setCountry(data.country || "");
@@ -57,7 +70,12 @@ export default function ProfilePage() {
     } = await supabase.auth.getSession();
 
     if (!session) {
-      alert("Please login first.");
+      alert(
+        language === "fr"
+          ? "Veuillez vous connecter d'abord."
+          : "Please login first."
+      );
+
       setSaving(false);
       return;
     }
@@ -69,8 +87,8 @@ export default function ProfilePage() {
       .upsert({
         id: user.id,
         full_name: fullName,
-        phone: phone,
-        country: country,
+        phone,
+        country,
       });
 
     if (error) {
@@ -79,7 +97,11 @@ export default function ProfilePage() {
       return;
     }
 
-    alert("Profile updated successfully!");
+    alert(
+      language === "fr"
+        ? "Profil mis à jour avec succès!"
+        : "Profile updated successfully!"
+    );
 
     setSaving(false);
   };
@@ -87,7 +109,7 @@ export default function ProfilePage() {
   if (loading) {
     return (
       <div style={{ padding: "40px" }}>
-        <h1>Loading profile...</h1>
+        <h1>{text.loading}</h1>
       </div>
     );
   }
@@ -98,53 +120,111 @@ export default function ProfilePage() {
 
       <div style={pageStyle}>
         <div style={cardStyle}>
-          <h1 style={titleStyle}>
-            My Profile
-          </h1>
+          <div style={headerStyle}>
+            <FaUser
+              size={70}
+              style={{
+                marginBottom: "15px",
+              }}
+            />
 
-          <input
-            type="text"
-            placeholder="Full Name"
-            value={fullName}
-            onChange={(e) =>
-              setFullName(e.target.value)
-            }
-            style={inputStyle}
-          />
+            <h1 style={titleStyle}>
+              {text.profileTitle}
+            </h1>
 
-          <input
-            type="text"
-            placeholder="Phone Number"
-            value={phone}
-            onChange={(e) =>
-              setPhone(e.target.value)
-            }
-            style={inputStyle}
-          />
+            <p>{text.profileSubtitle}</p>
+          </div>
 
-          <input
-            type="text"
-            placeholder="Country"
-            value={country}
-            onChange={(e) =>
-              setCountry(e.target.value)
-            }
-            style={inputStyle}
-          />
+          <div style={bodyStyle}>
+            <label style={labelStyle}>
+              {text.fullName}
+            </label>
 
-          <button
-            type="button"
-            onClick={updateProfile}
-            disabled={saving}
-            style={{
-              ...buttonStyle,
-              opacity: saving ? 0.6 : 1,
-            }}
-          >
-            {saving
-              ? "Saving..."
-              : "Save Profile"}
-          </button>
+            <div style={inputWrapper}>
+              <FaUser color="#008037" />
+
+              <input
+                type="text"
+                value={fullName}
+                onChange={(e) =>
+                  setFullName(e.target.value)
+                }
+                style={inputStyle}
+              />
+            </div>
+
+            <label style={labelStyle}>
+              {text.email}
+            </label>
+
+            <div style={inputWrapper}>
+              <FaUser color="#008037" />
+
+              <input
+                type="email"
+                value={email}
+                disabled
+                style={{
+                  ...inputStyle,
+                  color: "#666",
+                  background: "transparent",
+                }}
+              />
+            </div>
+
+            <label style={labelStyle}>
+              {text.phone}
+            </label>
+
+            <div style={inputWrapper}>
+              <FaPhone color="#008037" />
+
+              <input
+                type="text"
+                value={phone}
+                onChange={(e) =>
+                  setPhone(e.target.value)
+                }
+                style={inputStyle}
+              />
+            </div>
+
+            <label style={labelStyle}>
+              {text.country}
+            </label>
+
+            <div style={inputWrapper}>
+              <FaGlobe color="#008037" />
+
+              <input
+                type="text"
+                value={country}
+                onChange={(e) =>
+                  setCountry(e.target.value)
+                }
+                style={inputStyle}
+              />
+            </div>
+
+            <button
+              onClick={updateProfile}
+              disabled={saving}
+              style={{
+                ...buttonStyle,
+                opacity: saving ? 0.65 : 1,
+              }}
+            >
+              <FaSave
+                style={{
+                  marginRight: "10px",
+                }}
+              />
+
+              {saving
+                ? text.saving
+                : text.saveProfile}
+            </button>
+          </div>
         </div>
       </div>
     </>
@@ -153,43 +233,69 @@ export default function ProfilePage() {
 
 const pageStyle = {
   minHeight: "100vh",
-  background: "#f4f4f4",
+  background: "#f4f6f8",
   padding: "40px",
 };
 
 const cardStyle = {
-  maxWidth: "600px",
+  maxWidth: "850px",
   margin: "0 auto",
   background: "white",
-  padding: "40px",
-  borderRadius: "20px",
+  borderRadius: "24px",
+  overflow: "hidden",
   boxShadow:
-    "0 5px 15px rgba(0,0,0,0.08)",
+    "0 10px 25px rgba(0,0,0,0.08)",
+};
+
+const headerStyle = {
+  background: "#008037",
+  color: "white",
+  padding: "40px",
+  textAlign: "center" as const,
 };
 
 const titleStyle = {
-  color: "#008037",
-  marginBottom: "30px",
+  fontSize: "38px",
+  fontWeight: "bold" as const,
+  marginBottom: "10px",
+};
+
+const bodyStyle = {
+  padding: "40px",
+};
+
+const labelStyle = {
+  display: "block",
+  marginBottom: "8px",
+  marginTop: "18px",
+  fontWeight: "bold" as const,
+};
+
+const inputWrapper = {
+  display: "flex",
+  alignItems: "center",
+  gap: "10px",
+  border: "1px solid #ddd",
+  borderRadius: "12px",
+  padding: "12px",
 };
 
 const inputStyle = {
-  width: "100%",
-  padding: "15px",
-  marginBottom: "20px",
-  borderRadius: "10px",
-  border: "1px solid #ccc",
+  flex: 1,
+  border: "none",
+  outline: "none",
   fontSize: "16px",
-  boxSizing: "border-box" as const,
 };
 
 const buttonStyle = {
   width: "100%",
-  backgroundColor: "#008037",
+  background: "#008037",
   color: "white",
   border: "none",
-  padding: "15px",
-  borderRadius: "10px",
+  padding: "16px",
+  borderRadius: "12px",
   fontSize: "18px",
   fontWeight: "bold" as const,
-  cursor: "pointer" as const,
+  cursor: "pointer",
+  marginTop: "25px",
 };

@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from "react";
 import Navbar from "../components/Navbar";
-import { supabase } from "@/lib/supabase";
-import { getUserProfile } from "@/lib/auth";
+import { supabase } from "@/app/lib/supabase";
+import { getUserProfile } from "@/app/lib/auth";
 import { useRouter } from "next/navigation";
 
 type GroceryOrder = {
