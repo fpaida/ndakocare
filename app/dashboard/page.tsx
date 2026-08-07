@@ -1,233 +1,316 @@
 "use client";
-
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import Navbar from "../components/Navbar";
-import { supabase } from "@/app/lib/supabase";
+import { supabase } from "../lib/supabase";
 import { useLanguage } from "../context/LanguageContext";
-import {
-  FaClipboardList,
-  FaClock,
-  FaSpinner,
-  FaCheckCircle,
-  FaShoppingCart,
-  FaUser,
-} from "react-icons/fa";
 
-type GroceryOrder = {
-  id: number;
-  status: string;
-};
+import {
+  FaWallet,
+  FaUsers,
+  FaReceipt,
+  FaShoppingCart,
+  FaMobileAlt,
+  FaMoneyBillWave,
+  FaGraduationCap,
+  FaBolt,
+  FaTv,
+  FaPills,
+  FaTruck,
+  FaPiggyBank,
+  FaStore,
+  FaBell,
+} from "react-icons/fa";
 
 export default function DashboardPage() {
   const { language } = useLanguage();
+  const isFr = language === "fr";
 
-  const [orders, setOrders] = useState<GroceryOrder[]>([]);
+  const [walletBalance, setWalletBalance] = useState(0);
+  const [savingsCount, setSavingsCount] = useState(0);
+  const [communityCount, setCommunityCount] = useState(0);
+  const [notificationsCount, setNotificationsCount] = useState(0);
+  const [recentActivity, setRecentActivity] = useState<any[]>([]);
 
   useEffect(() => {
-    fetchOrders();
+    loadDashboard();
   }, []);
 
-  const fetchOrders = async () => {
+  const loadDashboard = async () => {
     const {
       data: { session },
     } = await supabase.auth.getSession();
 
     if (!session) return;
 
-    const { data, error } = await supabase
-      .from("grocery_orders")
+    const userId = session.user.id;
+
+    const { data: wallet } = await supabase
+      .from("wallets")
+      .select("balance")
+      .eq("user_id", userId)
+      .single();
+
+    setWalletBalance(Number(wallet?.balance || 0));
+
+    const { count: savings } = await supabase
+      .from("savings_goals")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", userId);
+
+    setSavingsCount(savings || 0);
+
+    const { count: communities } = await supabase
+      .from("community_wallets")
+      .select("*", { count: "exact", head: true })
+      .eq("owner_id", userId);
+
+    setCommunityCount(communities || 0);
+
+    const { count: notifications } = await supabase
+      .from("notifications")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .eq("is_read", false);
+
+    setNotificationsCount(notifications || 0);
+
+    const { data: activity } = await supabase
+      .from("wallet_transactions")
       .select("*")
-      .eq("user_id", session.user.id);
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(5);
 
-    if (error) {
-      console.log(error.message);
-      return;
-    }
-
-    setOrders(data || []);
+    setRecentActivity(activity || []);
   };
-
-  const totalOrders = orders.length;
-
-  const pendingOrders = orders.filter(
-    (order) => order.status === "Pending"
-  ).length;
-
-  const processingOrders = orders.filter(
-    (order) => order.status === "Processing"
-  ).length;
-
-  const deliveredOrders = orders.filter(
-    (order) => order.status === "Delivered"
-  ).length;
-
-  const text =
-    language === "fr"
-      ? {
-          title: "Tableau de Bord",
-          subtitle:
-            "Gérez vos commandes et suivez vos livraisons.",
-          total: "Total Commandes",
-          pending: "En Attente",
-          processing: "En Traitement",
-          delivered: "Livrées",
-          quick: "Actions Rapides",
-          grocery: "Nouvelle Commande",
-          profile: "Mon Profil",
-          orders: "Mes Commandes",
-        }
-      : {
-          title: "Dashboard",
-          subtitle:
-            "Manage your orders and track deliveries.",
-          total: "Total Orders",
-          pending: "Pending",
-          processing: "Processing",
-          delivered: "Delivered",
-          quick: "Quick Actions",
-          grocery: "New Grocery Order",
-          profile: "My Profile",
-          orders: "My Orders",
-        };
 
   return (
     <>
       <Navbar />
 
-      <div
-        style={{
-          minHeight: "100vh",
-          background: "#f4f6f8",
-          padding: "40px",
-        }}
-      >
-        <h1
-          style={{
-            fontSize: "48px",
-            color: "#008037",
-            fontWeight: "bold",
-            marginBottom: "10px",
-          }}
-        >
-          {text.title}
-        </h1>
+      <main className="min-h-screen bg-gray-100 p-8">
+        <div className="max-w-7xl mx-auto">
+          <div className="mb-10">
+            <h1 className="text-5xl font-bold text-green-700">
+              {isFr ? "Tableau de bord" : "Dashboard"}
+            </h1>
 
-        <p
-          style={{
-            color: "#666",
-            fontSize: "18px",
-            marginBottom: "40px",
-          }}
-        >
-          {text.subtitle}
-        </p>
+            <p className="text-gray-600 mt-2">
+              {isFr
+                ? "Gérez votre argent, vos services, vos projets et vos communautés."
+                : "Manage your money, services, projects, and communities."}
+            </p>
+          </div>
 
-        {/* Statistics Cards */}
+          <div className="bg-gradient-to-r from-green-700 to-green-500 text-white rounded-3xl p-8 mb-10 shadow-lg">
+            <h2 className="text-3xl font-bold mb-3">
+              {isFr
+                ? "Bienvenue dans l'écosystème financier NdakoCare"
+                : "Welcome to the NdakoCare Financial Ecosystem"}
+            </h2>
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns:
-              "repeat(auto-fit,minmax(240px,1fr))",
-            gap: "25px",
-            marginBottom: "40px",
-          }}
-        >
-          <StatCard
-            title={text.total}
-            value={totalOrders}
-            color="#008037"
-            icon={<FaClipboardList />}
-          />
+            <p className="text-lg opacity-90">
+              {isFr
+                ? "Gérez votre argent, soutenez votre famille, achetez des médicaments, payez des factures et participez aux projets communautaires depuis une seule plateforme."
+                : "Manage money, support family, purchase medicines, pay bills, and participate in community projects from one platform."}
+            </p>
+          </div>
 
-          <StatCard
-            title={text.pending}
-            value={pendingOrders}
-            color="#ff9800"
-            icon={<FaClock />}
-          />
+          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
+            <StatCard
+              title={isFr ? "Solde Disponible" : "Available Balance"}
+              value={`$${walletBalance.toFixed(2)}`}
+              icon={<FaWallet />}
+              color="text-green-700"
+            />
 
-          <StatCard
-            title={text.processing}
-            value={processingOrders}
-            color="#2196f3"
-            icon={<FaSpinner />}
-          />
+            <StatCard
+              title={isFr ? "Objectifs d'Épargne" : "Savings Goals"}
+              value={savingsCount}
+              icon={<FaPiggyBank />}
+              color="text-pink-600"
+            />
 
-          <StatCard
-            title={text.delivered}
-            value={deliveredOrders}
-            color="#008037"
-            icon={<FaCheckCircle />}
-          />
-        </div>
+            <StatCard
+              title={
+                isFr
+                  ? "Portefeuille Communautaire"
+                  : "Community Wallet"
+              }
+              value={communityCount}
+              icon={<FaUsers />}
+              color="text-blue-600"
+            />
 
-        {/* Quick Actions */}
+            <StatCard
+              title={isFr ? "Notifications" : "Notifications"}
+              value={notificationsCount}
+              icon={<FaBell />}
+              color="text-yellow-500"
+            />
+          </div>
 
-        <div
-          style={{
-            background: "white",
-            borderRadius: "24px",
-            padding: "30px",
-            boxShadow:
-              "0 10px 25px rgba(0,0,0,0.08)",
-          }}
-        >
-          <h2
-            style={{
-              fontSize: "28px",
-              color: "#111",
-              marginBottom: "25px",
-            }}
-          >
-            {text.quick}
-          </h2>
+          <div className="grid lg:grid-cols-3 gap-8 mb-10">
+            <div className="lg:col-span-2 bg-white rounded-3xl shadow-lg p-8">
+              <h2 className="text-3xl font-bold mb-6">
+                {isFr ? "Écosystème NdakoCare" : "NdakoCare Ecosystem"}
+              </h2>
 
-          <div
-            style={{
-              display: "flex",
-              gap: "20px",
-              flexWrap: "wrap",
-            }}
-          >
-            <a
-              href="/grocery"
-              style={actionCard}
-            >
-              <FaShoppingCart
-                size={28}
-                color="#008037"
-              />
+              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
+                <DashboardCard
+                  href="/wallet"
+                  title={isFr ? "Portefeuille" : "Wallet"}
+                  icon={<FaWallet />}
+                />
 
-              <span>{text.grocery}</span>
-            </a>
+                <DashboardCard
+                  href="/transfer"
+                  title={isFr ? "Transfert d'Argent" : "Money Transfer"}
+                  icon={<FaMoneyBillWave />}
+                />
 
-            <a
-              href="/my-orders"
-              style={actionCard}
-            >
-              <FaClipboardList
-                size={28}
-                color="#2196f3"
-              />
+                <DashboardCard
+                  href="/recharge"
+                  title={isFr ? "Recharge Mobile" : "Mobile Recharge"}
+                  icon={<FaMobileAlt />}
+                />
 
-              <span>{text.orders}</span>
-            </a>
+                <DashboardCard
+                  href="/savings"
+                  title={isFr ? "Objectifs d'Épargne" : "Savings Goals"}
+                  icon={<FaPiggyBank />}
+                />
 
-            <a
-              href="/profile"
-              style={actionCard}
-            >
-              <FaUser
-                size={28}
-                color="#ff9800"
-              />
+                <DashboardCard
+                  href="/community-wallet"
+                  title={
+                    isFr
+                      ? "Portefeuille Communautaire"
+                      : "Community Wallet"
+                  }
+                  icon={<FaUsers />}
+                />
 
-              <span>{text.profile}</span>
-            </a>
+                <DashboardCard
+                  href="/merchant-portal"
+                  title={isFr ? "Portail Marchand" : "Merchant Portal"}
+                  icon={<FaStore />}
+                />
+
+                <DashboardCard
+                  href="/grocery"
+                  title={isFr ? "Courses" : "Grocery"}
+                  icon={<FaShoppingCart />}
+                />
+
+                <DashboardCard
+                  href="/pharmacy"
+                  title={isFr ? "Pharmacie" : "Pharmacy"}
+                  icon={<FaPills />}
+                />
+
+                <DashboardCard
+                  href="/pay-school-fees"
+                  title={isFr ? "Frais scolaires" : "School Fees"}
+                  icon={<FaGraduationCap />}
+                />
+
+                <DashboardCard
+                  href="/pay-electricity"
+                  title={isFr ? "Électricité" : "Electricity"}
+                  icon={<FaBolt />}
+                />
+
+                <DashboardCard
+                  href="/pay-tv"
+                  title={isFr ? "Abonnement TV" : "TV Subscription"}
+                  icon={<FaTv />}
+                />
+
+                <DashboardCard
+                  href="/beneficiaries"
+                  title={isFr ? "Bénéficiaires" : "Beneficiaries"}
+                  icon={<FaUsers />}
+                />
+
+                <DashboardCard
+                  href="/my-orders"
+                  title={isFr ? "Suivi des commandes" : "Order Tracking"}
+                  icon={<FaTruck />}
+                />
+
+                <DashboardCard
+                  href="/reports"
+                  title={isFr ? "Rapports" : "Reports"}
+                  icon={<FaReceipt />}
+                />
+
+                <DashboardCard
+                  href="/notifications"
+                  title={isFr ? "Notifications" : "Notifications"}
+                  icon={<FaBell />}
+                />
+              </div>
+            </div>
+
+            <div className="bg-white rounded-3xl shadow-lg p-8">
+              <h2 className="text-3xl font-bold mb-6">
+                {isFr ? "Activité récente" : "Recent Activity"}
+              </h2>
+
+              {recentActivity.length === 0 ? (
+                <p className="text-gray-500">
+                  {isFr ? "Aucune activité récente." : "No recent activity."}
+                </p>
+              ) : (
+                <div className="space-y-4">
+                  {recentActivity.map((item) => {
+                    const isDeposit =
+                      item.transaction_type === "Deposit";
+
+                    return (
+                      <div key={item.id} className="border-b pb-3">
+                        <div className="flex justify-between gap-4">
+                          <p className="font-semibold">
+                            {item.transaction_type}
+                          </p>
+
+                          <p
+                            className={`font-bold ${
+                              isDeposit
+                                ? "text-green-700"
+                                : "text-red-600"
+                            }`}
+                          >
+                            {isDeposit ? "+" : "-"}$
+                            {Number(item.amount).toFixed(2)}
+                          </p>
+                        </div>
+
+                        <p className="text-sm text-gray-500">
+                          {item.description}
+                        </p>
+
+                        <p className="text-xs text-gray-400">
+                          {new Date(item.created_at).toLocaleDateString()}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <Link
+                href="/activity"
+                className="mt-6 inline-block bg-green-600 hover:bg-green-700 text-white px-5 py-3 rounded-xl font-semibold"
+              >
+                {isFr ? "Voir toute l'activité" : "View All Activity"}
+              </Link>
+            </div>
           </div>
         </div>
-      </div>
+      </main>
     </>
   );
 }
@@ -235,78 +318,45 @@ export default function DashboardPage() {
 function StatCard({
   title,
   value,
-  color,
   icon,
+  color,
 }: {
   title: string;
-  value: number;
-  color: string;
+  value: number | string;
   icon: React.ReactNode;
+  color: string;
 }) {
   return (
-    <div
-      style={{
-        background: "white",
-        borderRadius: "24px",
-        padding: "25px",
-        boxShadow:
-          "0 10px 25px rgba(0,0,0,0.08)",
-        borderTop: `6px solid ${color}`,
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          justifyContent:
-            "space-between",
-          alignItems: "center",
-        }}
-      >
+    <div className="bg-white rounded-3xl shadow-lg p-6">
+      <div className="flex justify-between items-center">
         <div>
-          <p
-            style={{
-              color: "#666",
-              fontSize: "16px",
-            }}
-          >
-            {title}
-          </p>
-
-          <h2
-            style={{
-              fontSize: "42px",
-              fontWeight: "bold",
-              color: "#111",
-            }}
-          >
-            {value}
-          </h2>
+          <p className="text-gray-500 font-medium">{title}</p>
+          <h2 className="text-4xl font-bold mt-2">{value}</h2>
         </div>
 
-        <div
-          style={{
-            fontSize: "35px",
-            color: color,
-          }}
-        >
-          {icon}
-        </div>
+        <div className={`text-4xl ${color}`}>{icon}</div>
       </div>
     </div>
   );
 }
 
-const actionCard = {
-  display: "flex",
-  alignItems: "center",
-  gap: "12px",
-  padding: "20px",
-  background: "#f9fafb",
-  borderRadius: "16px",
-  minWidth: "220px",
-  textDecoration: "none",
-  color: "#111",
-  fontWeight: "bold",
-  boxShadow:
-    "0 5px 15px rgba(0,0,0,0.05)",
-};
+function DashboardCard({
+  href,
+  title,
+  icon,
+}: {
+  href: string;
+  title: string;
+  icon: React.ReactNode;
+}) {
+  return (
+    <Link
+      href={href}
+      className="bg-gray-50 rounded-2xl p-5 hover:bg-green-50 hover:shadow-lg transition"
+    >
+      <div className="text-3xl text-green-700 mb-3">{icon}</div>
+
+      <h3 className="font-bold text-base">{title}</h3>
+    </Link>
+  );
+}

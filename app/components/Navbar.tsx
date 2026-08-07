@@ -1,161 +1,193 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/app/lib/supabase";
+import { supabase } from "../lib/supabase";
 import { useLanguage } from "../context/LanguageContext";
-import { translations } from "@/app/lib/translations";
+import { translations } from "../lib/translations";
 
 export default function Navbar() {
-  const router = useRouter();
+const router = useRouter();
+const { language, setLanguage } = useLanguage();
 
-  const { language, setLanguage } = useLanguage();
+const [isAdmin, setIsAdmin] = useState(false);
 
-  const text =
-    translations[
-      language as keyof typeof translations
-    ];
+const text =
+translations[
+language as keyof typeof translations
+];
 
-  const logout = async () => {
-    await supabase.auth.signOut();
-    router.push("/login");
-  };
+useEffect(() => {
+const checkAdmin = async () => {
+const {
+data: { user },
+} = await supabase.auth.getUser();
 
-  return (
-    <nav
-      style={{
-        background: "#008037",
-        padding: "16px 30px",
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        flexWrap: "wrap",
-        gap: "20px",
-        boxShadow:
-          "0 4px 15px rgba(0,0,0,0.08)",
-      }}
-    >
-      {/* LEFT */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "20px",
-        }}
-      >
+  if (!user) return;
+
+  const { data } = await supabase
+    .from("profiles")
+    .select("is_admin")
+    .eq("id", user.id)
+    .single();
+
+  if (data?.is_admin) {
+    setIsAdmin(true);
+  }
+};
+
+checkAdmin();
+
+}, []);
+
+const logout = async () => {
+await supabase.auth.signOut();
+router.push("/login");
+};
+
+const navLink =
+"px-3 py-2 rounded-lg hover:bg-green-600 transition duration-200";
+
+return ( <nav className="bg-green-700 text-white shadow-lg sticky top-0 z-50"> <div className="max-w-7xl mx-auto px-4">
+
+    {/* Header */}
+    <div className="flex flex-col lg:flex-row items-center justify-between py-4 gap-4">
+
+      {/* Logo + Back */}
+      <div className="flex items-center gap-4">
         <button
           onClick={() => router.back()}
-          style={backButton}
+          className="bg-white text-green-700 px-4 py-2 rounded-xl font-semibold hover:bg-gray-100"
         >
           ← {text.back}
         </button>
 
-        <h1
-          style={{
-            color: "white",
-            margin: 0,
-            fontSize: "32px",
-            fontWeight: "bold",
-          }}
-        >
-          NdakoCare
-        </h1>
+        <Link href="/dashboard">
+          <h1 className="text-3xl md:text-4xl font-extrabold cursor-pointer">
+            NdakoCare
+          </h1>
+        </Link>
       </div>
 
-      {/* RIGHT */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "18px",
-          flexWrap: "wrap",
-        }}
-      >
-        <Link href="/dashboard" style={linkStyle}>
-          {text.dashboard}
-        </Link>
-
-        <Link href="/grocery" style={linkStyle}>
-          {text.grocery}
-        </Link>
-
-        <Link href="/recharge" style={linkStyle}>
-          {text.recharge}
-        </Link>
-
-        <Link href="/my-orders" style={linkStyle}>
-          {text.orders}
-        </Link>
-
-        <Link href="/my-recharges" style={linkStyle}>
-          {text.recharges}
-        </Link>
-
-        <Link href="/profile" style={linkStyle}>
-          {text.profile}
-        </Link>
-
+      {/* Language + Logout */}
+      <div className="flex items-center gap-3">
         <select
           value={language}
-          onChange={(e) =>
-            setLanguage(e.target.value)
-          }
-          style={selectStyle}
+          onChange={(e) => setLanguage(e.target.value)}
+          className="text-black px-3 py-2 rounded-xl"
         >
-          <option value="en">
-            🇺🇸 EN
-          </option>
-
-          <option value="fr">
-            🇫🇷 FR
-          </option>
+          <option value="en">🇺🇸 English</option>
+          <option value="fr">🇫🇷 Français</option>
         </select>
 
         <button
           onClick={logout}
-          style={logoutButton}
+          className="bg-white text-green-700 px-5 py-2 rounded-xl font-semibold hover:bg-gray-100"
         >
           {text.logout}
         </button>
       </div>
-    </nav>
-  );
+    </div>
+
+   {/* Navigation */}
+<div className="flex flex-wrap items-center gap-2 pb-4 text-sm md:text-base">
+
+  {/* Dashboard */}
+  <Link href="/dashboard" className={navLink}>
+    Dashboard
+  </Link>
+
+  <Link href="/activity" className={navLink}>
+    Activity Center
+  </Link>
+
+  <Link href="/notifications" className={navLink}>
+    🔔 Notifications
+  </Link>
+
+  {/* Wallet */}
+  <Link href="/wallet" className={navLink}>
+    Wallet
+  </Link>
+
+  <Link href="/wallet/history" className={navLink}>
+    Wallet History
+  </Link>
+
+  <Link href="/beneficiaries" className={navLink}>
+    Beneficiaries
+  </Link>
+
+  <Link href="/transfer" className={navLink}>
+    Money Transfer
+  </Link>
+
+  <Link href="/transfer-history" className={navLink}>
+    Transfers
+  </Link>
+
+  {/* Fintech */}
+  <Link href="/savings" className={navLink}>
+    Savings Goals
+  </Link>
+
+  <Link href="/community-wallet" className={navLink}>
+    Community Wallet
+  </Link>
+
+  {/* Family Services */}
+  <Link href="/grocery" className={navLink}>
+    Grocery
+  </Link>
+
+  <Link href="/pharmacy" className={navLink}>
+    Pharmacy
+  </Link>
+
+  <Link href="/recharge" className={navLink}>
+    Mobile Recharge
+  </Link>
+
+  <Link href="/pay-school-fees" className={navLink}>
+    School Fees
+  </Link>
+
+  <Link href="/pay-electricity" className={navLink}>
+    Electricity
+  </Link>
+
+  <Link href="/pay-tv" className={navLink}>
+    TV Subscription
+  </Link>
+
+  {/* Business */}
+  <Link href="/merchant-portal" className={navLink}>
+    Merchant Portal
+  </Link>
+
+  <Link href="/reports" className={navLink}>
+    Reports
+  </Link>
+
+  {/* Profile */}
+  <Link href="/profile" className={navLink}>
+    Profile
+  </Link>
+
+  {/* Admin */}
+  {isAdmin && (
+    <Link
+      href="/admin"
+      className="px-3 py-2 rounded-lg bg-yellow-500 text-black font-semibold hover:bg-yellow-400"
+    >
+      Admin
+    </Link>
+  )}
+
+</div>
+  </div>
+</nav>
+
+);
 }
-
-const linkStyle = {
-  color: "white",
-  textDecoration: "none",
-  fontWeight: "bold" as const,
-  fontSize: "16px",
-};
-
-const backButton = {
-  background: "white",
-  color: "#008037",
-  border: "none",
-  padding: "10px 15px",
-  borderRadius: "10px",
-  cursor: "pointer",
-  fontWeight: "bold" as const,
-  fontSize: "15px",
-};
-
-const selectStyle = {
-  padding: "10px 12px",
-  borderRadius: "10px",
-  border: "1px solid white",
-  fontSize: "15px",
-  cursor: "pointer",
-  background: "white",
-};
-
-const logoutButton = {
-  background: "white",
-  color: "#008037",
-  border: "none",
-  padding: "12px 18px",
-  borderRadius: "10px",
-  cursor: "pointer",
-  fontWeight: "bold" as const,
-  fontSize: "16px",
-};

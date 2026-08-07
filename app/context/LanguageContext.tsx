@@ -3,6 +3,7 @@
 import {
   createContext,
   useContext,
+  useEffect,
   useState,
 } from "react";
 
@@ -25,11 +26,32 @@ export function LanguageProvider({
   const [language, setLanguage] =
     useState("en");
 
+  useEffect(() => {
+    const savedLanguage =
+      localStorage.getItem("language");
+
+    if (savedLanguage) {
+      setLanguage(savedLanguage);
+    }
+  }, []);
+
+  const changeLanguage = (
+    value: string
+  ) => {
+    setLanguage(value);
+
+    localStorage.setItem(
+      "language",
+      value
+    );
+  };
+
   return (
     <LanguageContext.Provider
       value={{
         language,
-        setLanguage,
+        setLanguage:
+          changeLanguage,
       }}
     >
       {children}
@@ -38,5 +60,7 @@ export function LanguageProvider({
 }
 
 export function useLanguage() {
-  return useContext(LanguageContext);
+  return useContext(
+    LanguageContext
+  );
 }

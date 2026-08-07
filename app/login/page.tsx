@@ -3,9 +3,12 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/app/lib/supabase";
+import { useLanguage } from "../context/LanguageContext";
 
 export default function LoginPage() {
   const router = useRouter();
+
+  const { language } = useLanguage();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] =
@@ -33,10 +36,13 @@ export default function LoginPage() {
       return;
     }
 
-    alert("Login successful!");
+    alert(
+      language === "fr"
+        ? "Connexion réussie !"
+        : "Login successful!"
+    );
 
     router.push("/dashboard");
-
     router.refresh();
 
     setLoading(false);
@@ -46,7 +52,7 @@ export default function LoginPage() {
     <div
       style={{
         minHeight: "100vh",
-        background: "#f4f4f4",
+        background: "#f4f6f8",
         display: "flex",
         justifyContent: "center",
         alignItems: "center",
@@ -62,21 +68,28 @@ export default function LoginPage() {
           width: "100%",
           maxWidth: "450px",
           boxShadow:
-            "0 5px 15px rgba(0,0,0,0.08)",
+            "0 10px 25px rgba(0,0,0,0.08)",
         }}
       >
         <h1
           style={{
             color: "#008037",
             marginBottom: "25px",
+            textAlign: "center",
           }}
         >
-          Login
+          {language === "fr"
+            ? "Connexion"
+            : "Login"}
         </h1>
 
         <input
           type="email"
-          placeholder="Email"
+          placeholder={
+            language === "fr"
+              ? "Adresse Email"
+              : "Email"
+          }
           value={email}
           onChange={(e) =>
             setEmail(e.target.value)
@@ -87,7 +100,11 @@ export default function LoginPage() {
 
         <input
           type="password"
-          placeholder="Password"
+          placeholder={
+            language === "fr"
+              ? "Mot de passe"
+              : "Password"
+          }
           value={password}
           onChange={(e) =>
             setPassword(e.target.value)
@@ -102,7 +119,11 @@ export default function LoginPage() {
           style={buttonStyle}
         >
           {loading
-            ? "Logging in..."
+            ? language === "fr"
+              ? "Connexion..."
+              : "Logging in..."
+            : language === "fr"
+            ? "Se connecter"
             : "Login"}
         </button>
 
@@ -112,7 +133,10 @@ export default function LoginPage() {
             textAlign: "center",
           }}
         >
-          No account yet?
+          {language === "fr"
+            ? "Pas encore de compte ?"
+            : "No account yet?"}
+
           <a
             href="/register"
             style={{
@@ -121,7 +145,9 @@ export default function LoginPage() {
               fontWeight: "bold",
             }}
           >
-            Create Account
+            {language === "fr"
+              ? "Créer un compte"
+              : "Create Account"}
           </a>
         </p>
       </form>

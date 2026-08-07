@@ -1,13 +1,20 @@
 "use client";
 
 import { useState } from "react";
-
 import { useRouter } from "next/navigation";
-
 import { supabase } from "@/app/lib/supabase";
+import { useLanguage } from "../context/LanguageContext";
+import { translations } from "../lib/translations";
 
 export default function RegisterPage() {
   const router = useRouter();
+
+  const { language } = useLanguage();
+
+  const text =
+    translations[
+      language as keyof typeof translations
+    ];
 
   const [email, setEmail] =
     useState("");
@@ -30,49 +37,34 @@ export default function RegisterPage() {
       error,
     } = await supabase.auth.signUp({
       email,
-
       password,
     });
 
     if (error) {
       alert(error.message);
-
       setLoading(false);
-
       return;
     }
 
-    // CREATE PROFILE
     if (data.user) {
-      const {
-        error: profileError,
-      } = await supabase
+      await supabase
         .from("profiles")
         .insert([
           {
             id: data.user.id,
-
             full_name: "",
-
             phone: "",
-
             country: "",
-
-            language: "en",
-
+            language,
             role: "customer",
           },
         ]);
-
-      if (profileError) {
-        console.log(
-          profileError.message
-        );
-      }
     }
 
     alert(
-      "Account created successfully!"
+      language === "fr"
+        ? "Compte créé avec succès !"
+        : "Account created successfully!"
     );
 
     setLoading(false);
@@ -84,15 +76,10 @@ export default function RegisterPage() {
     <div
       style={{
         minHeight: "100vh",
-
-        background: "#f4f4f4",
-
+        background: "#f4f6f8",
         display: "flex",
-
         justifyContent: "center",
-
         alignItems: "center",
-
         padding: "20px",
       }}
     >
@@ -100,37 +87,36 @@ export default function RegisterPage() {
         onSubmit={handleRegister}
         style={{
           background: "white",
-
           padding: "40px",
-
           borderRadius: "20px",
-
           width: "100%",
-
           maxWidth: "450px",
-
           boxShadow:
-            "0 5px 15px rgba(0,0,0,0.08)",
+            "0 10px 25px rgba(0,0,0,0.08)",
         }}
       >
         <h1
           style={{
             color: "#008037",
-
             marginBottom: "25px",
+            textAlign: "center",
           }}
         >
-          Create Account
+          {language === "fr"
+            ? "Créer un compte"
+            : "Create Account"}
         </h1>
 
         <input
           type="email"
-          placeholder="Email"
+          placeholder={
+            language === "fr"
+              ? "Adresse Email"
+              : "Email"
+          }
           value={email}
           onChange={(e) =>
-            setEmail(
-              e.target.value
-            )
+            setEmail(e.target.value)
           }
           required
           style={inputStyle}
@@ -138,7 +124,11 @@ export default function RegisterPage() {
 
         <input
           type="password"
-          placeholder="Password"
+          placeholder={
+            language === "fr"
+              ? "Mot de passe"
+              : "Password"
+          }
           value={password}
           onChange={(e) =>
             setPassword(
@@ -155,30 +145,35 @@ export default function RegisterPage() {
           style={buttonStyle}
         >
           {loading
-            ? "Creating..."
+            ? language === "fr"
+              ? "Création..."
+              : "Creating..."
+            : language === "fr"
+            ? "Créer un compte"
             : "Create Account"}
         </button>
 
         <p
           style={{
             marginTop: "20px",
-
             textAlign: "center",
           }}
         >
-          Already have an account?
+          {language === "fr"
+            ? "Vous avez déjà un compte ?"
+            : "Already have an account?"}
 
           <a
             href="/login"
             style={{
               color: "#008037",
-
               marginLeft: "5px",
-
               fontWeight: "bold",
             }}
           >
-            Login
+            {language === "fr"
+              ? "Connexion"
+              : "Login"}
           </a>
         </p>
       </form>
@@ -188,34 +183,21 @@ export default function RegisterPage() {
 
 const inputStyle = {
   width: "100%",
-
   padding: "15px",
-
   marginBottom: "20px",
-
   borderRadius: "10px",
-
   border: "1px solid #ccc",
-
   fontSize: "16px",
 };
 
 const buttonStyle = {
   width: "100%",
-
   background: "#008037",
-
   color: "white",
-
   border: "none",
-
   padding: "15px",
-
   borderRadius: "10px",
-
   fontSize: "18px",
-
-  fontWeight: "bold",
-
+  fontWeight: "bold" as const,
   cursor: "pointer",
 };
