@@ -290,26 +290,52 @@ export default function GroceryPage() {
 
       const orderItems = buildOrderItemsText();
 
-      const { error } = await supabase
-        .from("grocery_orders")
-        .insert([
-          {
-            user_id: user.id,
-            recipient_name:
-              recipientName.trim(),
-            phone_number: phone.trim(),
-            country: countryName,
-            city: city.trim(),
-            delivery_type: deliveryType,
-            grocery_items: orderItems,
-            status: "Pending",
-          },
-        ]);
+const { data: createdOrder, error } = await supabase
+  .from("grocery_orders")
+  .insert([
+    {
+      user_id: user.id,
+      recipient_name: recipientName.trim(),
+      phone_number: phone.trim(),
+      country: countryName,
+      city: city.trim(),
+      delivery_type: deliveryType,
+      grocery_items: orderItems,
+      status: "Pending",
+    },
+  ])
+  .select("id")
+  .single();
 
-      if (error) {
-        throw error;
-      }
+if (error) {
+  throw error;
+}
 
+if (!createdOrder) {
+  throw new Error(
+    "The grocery order was created without returning an order ID."
+  );
+}
+
+const structuredItems = cartDetails.map((item) => ({
+  order_id: createdOrder.id,
+  product_name:
+    item.product.name[isFr ? "fr" : "en"],
+  product_unit: item.product.unit,
+  quantity: item.quantity,
+  unit_price: item.product.price,
+  currency: item.product.currency,
+}));
+
+if (structuredItems.length > 0) {
+  const { error: itemsError } = await supabase
+    .from("grocery_order_items")
+    .insert(structuredItems);
+
+  if (itemsError) {
+    throw itemsError;
+  }
+}
       try {
         const emailResponse = await fetch(
           "/api/send-order-email",
