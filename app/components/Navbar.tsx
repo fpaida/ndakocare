@@ -90,29 +90,23 @@ return ( <nav className="bg-green-700 text-white shadow-lg sticky top-0 z-50"> <
       </div>
     </div>
 
-   {/* Navigation */}
+ {/* Navigation */}
 <div className="flex flex-wrap items-center gap-2 pb-4 text-sm md:text-base">
 
-  {/* Dashboard */}
   <Link href="/dashboard" className={navLink}>
     Dashboard
   </Link>
 
   <Link href="/activity" className={navLink}>
-    Activity Center
+    Activity
   </Link>
 
   <Link href="/notifications" className={navLink}>
     🔔 Notifications
   </Link>
 
-  {/* Wallet */}
   <Link href="/wallet" className={navLink}>
     Wallet
-  </Link>
-
-  <Link href="/wallet/history" className={navLink}>
-    Wallet History
   </Link>
 
   <Link href="/beneficiaries" className={navLink}>
@@ -123,59 +117,10 @@ return ( <nav className="bg-green-700 text-white shadow-lg sticky top-0 z-50"> <
     Money Transfer
   </Link>
 
-  <Link href="/transfer-history" className={navLink}>
-    Transfers
-  </Link>
-
-  {/* Fintech */}
-  <Link href="/savings" className={navLink}>
-    Savings Goals
-  </Link>
-
-  <Link href="/community-wallet" className={navLink}>
-    Community Wallet
-  </Link>
-
-  {/* Family Services */}
-  <Link href="/grocery" className={navLink}>
-    Grocery
-  </Link>
-
-  <Link href="/pharmacy" className={navLink}>
-    Pharmacy
-  </Link>
-
-  <Link href="/recharge" className={navLink}>
-    Mobile Recharge
-  </Link>
-
-  <Link href="/pay-school-fees" className={navLink}>
-    School Fees
-  </Link>
-
-  <Link href="/pay-electricity" className={navLink}>
-    Electricity
-  </Link>
-
-  <Link href="/pay-tv" className={navLink}>
-    TV Subscription
-  </Link>
-
-  {/* Business */}
-  <Link href="/merchant-portal" className={navLink}>
-    Merchant Portal
-  </Link>
-
-  <Link href="/reports" className={navLink}>
-    Reports
-  </Link>
-
-  {/* Profile */}
   <Link href="/profile" className={navLink}>
     Profile
   </Link>
 
-  {/* Admin */}
   {isAdmin && (
     <Link
       href="/admin"
