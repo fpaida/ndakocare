@@ -6,6 +6,11 @@ import Navbar from "../components/Navbar";
 import { supabase } from "../lib/supabase";
 import { useLanguage } from "../context/LanguageContext";
 import { translations } from "../lib/translations";
+import {
+  formatCurrency,
+  getCurrencyName,
+  getCurrencySymbol,
+} from "../lib/currency";
 
 type WalletTransaction = {
   id: string;
@@ -14,6 +19,14 @@ type WalletTransaction = {
   amount: number | string;
   currency: string | null;
   description: string | null;
+  created_at: string;
+};
+
+type WalletBalance = {
+  id: string;
+  user_id: string;
+  currency: string;
+  balance: number | string;
   created_at: string;
 };
 
@@ -33,12 +46,12 @@ type TransactionFilter = (typeof transactionFilters)[number];
 
 export default function WalletPage() {
   const { language } = useLanguage();
-
   const text = translations[language as keyof typeof translations];
-
   const isFrench = language === "fr";
 
-  const [balance, setBalance] = useState(0);
+  const [walletBalances, setWalletBalances] = useState<WalletBalance[]>([]);
+  const [preferredCurrency, setPreferredCurrency] = useState("USD");
+  const [selectedCurrency, setSelectedCurrency] = useState("");
   const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
   const [amount, setAmount] = useState("");
   const [showDeposit, setShowDeposit] = useState(false);
@@ -49,9 +62,22 @@ export default function WalletPage() {
   const [isDepositing, setIsDepositing] = useState(false);
   const [message, setMessage] = useState<MessageState>(null);
 
+  const activeCurrency = selectedCurrency || preferredCurrency;
+
+  const activeWallet = useMemo(() => {
+    return walletBalances.find(
+      (wallet) => wallet.currency === activeCurrency
+    );
+  }, [walletBalances, activeCurrency]);
+
+  const displayMoney = useCallback(
+    (value: number, currency: string) =>
+      formatCurrency(value, currency, isFrench ? "fr" : "en"),
+    [isFrench]
+  );
+
   const fetchWalletData = useCallback(async () => {
     setIsLoading(true);
-    setMessage(null);
 
     try {
       const {
@@ -73,39 +99,62 @@ export default function WalletPage() {
         return;
       }
 
-      const { data: walletData, error: walletError } = await supabase
-        .from("wallets")
-        .select("balance")
-        .eq("user_id", session.user.id)
+      const userId = session.user.id;
+
+      const { data: profile, error: profileError } = await supabase
+        .from("profiles")
+        .select("preferred_currency")
+        .eq("id", userId)
         .maybeSingle();
 
-      if (walletError) {
-        throw walletError;
+      if (profileError) {
+        throw profileError;
       }
 
-      let currentBalance = 0;
+      const profileCurrency = profile?.preferred_currency || "USD";
+      setPreferredCurrency(profileCurrency);
 
-      if (!walletData) {
-        const { data: newWallet, error: createWalletError } =
-          await supabase
-            .from("wallets")
-            .insert([
-              {
-                user_id: session.user.id,
-                balance: 0,
-              },
-            ])
-            .select("balance")
-            .single();
+      // Every user should always have a balance row for the preferred currency.
+      const { error: ensureWalletError } = await supabase
+        .from("wallet_balances")
+        .upsert(
+          {
+            user_id: userId,
+            currency: profileCurrency,
+            balance: 0,
+          },
+          {
+            onConflict: "user_id,currency",
+            ignoreDuplicates: true,
+          }
+        );
 
-        if (createWalletError) {
-          throw createWalletError;
-        }
-
-        currentBalance = Number(newWallet?.balance ?? 0);
-      } else {
-        currentBalance = Number(walletData.balance ?? 0);
+      if (ensureWalletError) {
+        throw ensureWalletError;
       }
+
+      const { data: balanceData, error: balanceError } = await supabase
+        .from("wallet_balances")
+        .select("id, user_id, currency, balance, created_at")
+        .eq("user_id", userId)
+        .order("currency", { ascending: true });
+
+      if (balanceError) {
+        throw balanceError;
+      }
+
+      const balances = (balanceData ?? []) as WalletBalance[];
+      setWalletBalances(balances);
+
+      setSelectedCurrency((currentCurrency) => {
+        const currentStillExists = balances.some(
+          (wallet) => wallet.currency === currentCurrency
+        );
+
+        return currentStillExists
+          ? currentCurrency
+          : profileCurrency;
+      });
 
       const { data: transactionData, error: transactionError } =
         await supabase
@@ -113,14 +162,13 @@ export default function WalletPage() {
           .select(
             "id, user_id, transaction_type, amount, currency, description, created_at"
           )
-          .eq("user_id", session.user.id)
+          .eq("user_id", userId)
           .order("created_at", { ascending: false });
 
       if (transactionError) {
         throw transactionError;
       }
 
-      setBalance(currentBalance);
       setTransactions(transactionData ?? []);
     } catch (error) {
       const errorMessage =
@@ -158,6 +206,16 @@ export default function WalletPage() {
       return;
     }
 
+    if (!activeCurrency) {
+      setMessage({
+        type: "error",
+        text: isFrench
+          ? "Veuillez sélectionner un compte en devise."
+          : "Please select a currency account.",
+      });
+      return;
+    }
+
     setIsDepositing(true);
 
     try {
@@ -180,9 +238,10 @@ export default function WalletPage() {
 
       const { data: latestWallet, error: walletReadError } =
         await supabase
-          .from("wallets")
+          .from("wallet_balances")
           .select("balance")
           .eq("user_id", session.user.id)
+          .eq("currency", activeCurrency)
           .single();
 
       if (walletReadError) {
@@ -193,11 +252,10 @@ export default function WalletPage() {
       const newBalance = latestBalance + depositAmount;
 
       const { error: walletUpdateError } = await supabase
-        .from("wallets")
-        .update({
-          balance: newBalance,
-        })
-        .eq("user_id", session.user.id);
+        .from("wallet_balances")
+        .update({ balance: newBalance })
+        .eq("user_id", session.user.id)
+        .eq("currency", activeCurrency);
 
       if (walletUpdateError) {
         throw walletUpdateError;
@@ -210,18 +268,19 @@ export default function WalletPage() {
             user_id: session.user.id,
             transaction_type: "Deposit",
             amount: depositAmount,
-            currency: "USD",
-            description: "Wallet Deposit",
+            currency: activeCurrency,
+            description: `Wallet Deposit - ${activeCurrency}`,
           },
         ]);
 
       if (transactionError) {
+        // Temporary client-side rollback. A later production phase will move
+        // balance mutation + transaction creation into one atomic server action.
         const { error: rollbackError } = await supabase
-          .from("wallets")
-          .update({
-            balance: latestBalance,
-          })
-          .eq("user_id", session.user.id);
+          .from("wallet_balances")
+          .update({ balance: latestBalance })
+          .eq("user_id", session.user.id)
+          .eq("currency", activeCurrency);
 
         if (rollbackError) {
           console.error(
@@ -236,14 +295,14 @@ export default function WalletPage() {
       setAmount("");
       setShowDeposit(false);
 
+      await fetchWalletData();
+
       setMessage({
         type: "success",
         text: isFrench
-          ? "Dépôt effectué avec succès."
-          : "Deposit completed successfully.",
+          ? `Dépôt ${activeCurrency} effectué avec succès.`
+          : `${activeCurrency} deposit completed successfully.`,
       });
-
-      await fetchWalletData();
     } catch (error) {
       const errorMessage =
         error instanceof Error
@@ -270,8 +329,15 @@ export default function WalletPage() {
     });
   };
 
+  const selectedCurrencyTransactions = useMemo(() => {
+    return transactions.filter(
+      (transaction) =>
+        (transaction.currency || "USD") === activeCurrency
+    );
+  }, [transactions, activeCurrency]);
+
   const totalDeposits = useMemo(() => {
-    return transactions
+    return selectedCurrencyTransactions
       .filter(
         (transaction) =>
           transaction.transaction_type.toLowerCase() === "deposit"
@@ -281,13 +347,12 @@ export default function WalletPage() {
           total + Number(transaction.amount ?? 0),
         0
       );
-  }, [transactions]);
+  }, [selectedCurrencyTransactions]);
 
   const totalOutgoing = useMemo(() => {
-    return transactions
+    return selectedCurrencyTransactions
       .filter((transaction) => {
         const type = transaction.transaction_type.toLowerCase();
-
         return type === "transfer" || type === "withdrawal";
       })
       .reduce(
@@ -295,7 +360,7 @@ export default function WalletPage() {
           total + Number(transaction.amount ?? 0),
         0
       );
-  }, [transactions]);
+  }, [selectedCurrencyTransactions]);
 
   const filteredTransactions = useMemo(() => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
@@ -323,23 +388,6 @@ export default function WalletPage() {
       return matchesFilter && matchesSearch;
     });
   }, [activeFilter, searchTerm, transactions]);
-
-  const formatCurrency = (
-    value: number,
-    currency = "USD"
-  ) => {
-    try {
-      return new Intl.NumberFormat(
-        isFrench ? "fr-FR" : "en-US",
-        {
-          style: "currency",
-          currency,
-        }
-      ).format(value);
-    } catch {
-      return `$${value.toFixed(2)}`;
-    }
-  };
 
   const formatDate = (date: string) => {
     return new Intl.DateTimeFormat(
@@ -374,7 +422,7 @@ export default function WalletPage() {
         iconClass: "bg-blue-100 text-blue-700",
         badgeClass:
           "bg-blue-100 text-blue-700 ring-blue-600/20",
-        amountClass: "text-gray-900",
+        amountClass: "text-slate-900",
         prefix: "-",
       };
     }
@@ -385,17 +433,17 @@ export default function WalletPage() {
         iconClass: "bg-orange-100 text-orange-700",
         badgeClass:
           "bg-orange-100 text-orange-700 ring-orange-600/20",
-        amountClass: "text-gray-900",
+        amountClass: "text-slate-900",
         prefix: "-",
       };
     }
 
     return {
       icon: "•",
-      iconClass: "bg-gray-100 text-gray-700",
+      iconClass: "bg-slate-100 text-slate-700",
       badgeClass:
-        "bg-gray-100 text-gray-700 ring-gray-600/20",
-      amountClass: "text-gray-900",
+        "bg-slate-100 text-slate-700 ring-slate-600/20",
+      amountClass: "text-slate-900",
       prefix: "",
     };
   };
@@ -433,7 +481,9 @@ export default function WalletPage() {
                 </h1>
 
                 <p className="mt-2 max-w-2xl text-slate-600">
-                  {text.walletDescription}
+                  {isFrench
+                    ? "Gérez vos comptes NdakoCare en plusieurs devises depuis un seul portefeuille."
+                    : "Manage your NdakoCare currency accounts from one wallet."}
                 </p>
               </div>
 
@@ -471,9 +521,7 @@ export default function WalletPage() {
                   onClick={() => setMessage(null)}
                   className="rounded-md px-2 text-lg leading-none opacity-60 transition hover:opacity-100"
                   aria-label={
-                    isFrench
-                      ? "Fermer le message"
-                      : "Close message"
+                    isFrench ? "Fermer le message" : "Close message"
                   }
                 >
                   ×
@@ -486,26 +534,33 @@ export default function WalletPage() {
             <div className="flex flex-col gap-8 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <p className="text-sm font-medium text-emerald-100">
-                  {text.availableBalance}
+                  {isFrench ? "Compte sélectionné" : "Selected account"}
                 </p>
 
                 {isLoading ? (
                   <div className="mt-3 h-14 w-56 animate-pulse rounded-xl bg-white/20" />
                 ) : (
                   <h2 className="mt-2 text-4xl font-bold tracking-tight sm:text-5xl">
-                    {formatCurrency(balance)}
+                    {displayMoney(
+                      Number(activeWallet?.balance ?? 0),
+                      activeCurrency
+                    )}
                   </h2>
                 )}
 
                 <div className="mt-6 flex flex-wrap items-center gap-3 text-sm text-emerald-50">
                   <span className="rounded-full bg-white/10 px-3 py-1.5 ring-1 ring-white/20">
-                    USD
+                    {activeCurrency}
                   </span>
 
+                  {activeCurrency === preferredCurrency && (
+                    <span className="rounded-full bg-white/10 px-3 py-1.5 ring-1 ring-white/20">
+                      {isFrench ? "Compte principal" : "Primary account"}
+                    </span>
+                  )}
+
                   <span>
-                    {isFrench
-                      ? "Portefeuille personnel sécurisé"
-                      : "Secure personal wallet"}
+                    {getCurrencyName(activeCurrency)}
                   </span>
                 </div>
               </div>
@@ -524,9 +579,7 @@ export default function WalletPage() {
                     {text.walletDeposit}
                   </span>
                   <span className="mt-1 block text-xs text-emerald-700">
-                    {isFrench
-                      ? "Ajouter des fonds"
-                      : "Add funds"}
+                    {isFrench ? "Ajouter des fonds" : "Add funds"}
                   </span>
                 </button>
 
@@ -539,9 +592,7 @@ export default function WalletPage() {
                     {text.walletTransfer}
                   </span>
                   <span className="mt-1 block text-xs text-emerald-50">
-                    {isFrench
-                      ? "Envoyer de l'argent"
-                      : "Send money"}
+                    {isFrench ? "Envoyer de l'argent" : "Send money"}
                   </span>
                 </Link>
 
@@ -555,13 +606,92 @@ export default function WalletPage() {
                     {text.walletWithdraw}
                   </span>
                   <span className="mt-1 block text-xs text-emerald-50">
-                    {isFrench
-                      ? "Bientôt disponible"
-                      : "Coming soon"}
+                    {isFrench ? "Bientôt disponible" : "Coming soon"}
                   </span>
                 </button>
               </div>
             </div>
+          </section>
+
+          <section className="mb-8">
+            <div className="mb-5">
+              <h2 className="text-2xl font-bold text-slate-950">
+                {isFrench
+                  ? "Vos comptes en devises"
+                  : "Your Currency Accounts"}
+              </h2>
+
+              <p className="mt-1 text-sm text-slate-600">
+                {isFrench
+                  ? "Sélectionnez un compte pour consulter son solde et effectuer des opérations."
+                  : "Select an account to view its balance and perform wallet actions."}
+              </p>
+            </div>
+
+            {isLoading ? (
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {[1, 2].map((item) => (
+                  <div
+                    key={item}
+                    className="h-40 animate-pulse rounded-3xl bg-slate-200"
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {walletBalances.map((wallet) => {
+                  const isPrimary =
+                    wallet.currency === preferredCurrency;
+                  const isSelected =
+                    wallet.currency === activeCurrency;
+
+                  return (
+                    <button
+                      key={wallet.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedCurrency(wallet.currency);
+                        setShowDeposit(false);
+                        setAmount("");
+                      }}
+                      className={`rounded-3xl border p-6 text-left shadow-sm transition ${
+                        isSelected
+                          ? "border-emerald-500 bg-emerald-50 ring-2 ring-emerald-100"
+                          : "border-slate-200 bg-white hover:border-emerald-300"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <p className="text-sm font-bold uppercase tracking-wide text-slate-500">
+                            {wallet.currency}
+                          </p>
+                          <h3 className="mt-1 font-semibold text-slate-900">
+                            {getCurrencyName(wallet.currency)}
+                          </h3>
+                        </div>
+
+                        {isPrimary && (
+                          <span className="rounded-full bg-emerald-600 px-3 py-1 text-xs font-bold text-white">
+                            {isFrench ? "Principal" : "Primary"}
+                          </span>
+                        )}
+                      </div>
+
+                      <p className="mt-6 text-3xl font-bold text-slate-950">
+                        {displayMoney(
+                          Number(wallet.balance ?? 0),
+                          wallet.currency
+                        )}
+                      </p>
+
+                      <p className="mt-2 text-xs font-medium text-slate-500">
+                        {getCurrencySymbol(wallet.currency)} · {wallet.currency}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </section>
 
           {showDeposit && (
@@ -569,15 +699,12 @@ export default function WalletPage() {
               <div className="mb-6 flex items-start justify-between gap-4">
                 <div>
                   <h2 className="text-xl font-bold text-slate-950">
-                    {isFrench
-                      ? "Déposer de l'argent"
-                      : "Deposit Money"}
+                    {isFrench ? "Déposer de l'argent" : "Deposit Money"}
                   </h2>
-
                   <p className="mt-1 text-sm text-slate-600">
                     {isFrench
-                      ? "Ajoutez des fonds à votre portefeuille NdakoCare."
-                      : "Add funds to your NdakoCare wallet."}
+                      ? `Ajoutez des fonds à votre compte ${activeCurrency}.`
+                      : `Add funds to your ${activeCurrency} account.`}
                   </p>
                 </div>
 
@@ -589,9 +716,7 @@ export default function WalletPage() {
                   }}
                   className="rounded-full bg-slate-100 px-3 py-1.5 text-xl leading-none text-slate-600 transition hover:bg-slate-200"
                   aria-label={
-                    isFrench
-                      ? "Fermer le formulaire"
-                      : "Close deposit form"
+                    isFrench ? "Fermer le formulaire" : "Close deposit form"
                   }
                 >
                   ×
@@ -607,9 +732,14 @@ export default function WalletPage() {
                     {isFrench ? "Montant du dépôt" : "Deposit amount"}
                   </label>
 
+                  <p className="mb-3 text-sm text-slate-500">
+                    {isFrench ? "Compte sélectionné" : "Selected account"}: {" "}
+                    <strong>{activeCurrency}</strong>
+                  </p>
+
                   <div className="relative">
-                    <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-4 text-lg font-semibold text-slate-500">
-                      $
+                    <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-4 text-sm font-semibold text-slate-500">
+                      {getCurrencySymbol(activeCurrency)}
                     </span>
 
                     <input
@@ -619,16 +749,14 @@ export default function WalletPage() {
                       step="0.01"
                       inputMode="decimal"
                       value={amount}
-                      onChange={(event) =>
-                        setAmount(event.target.value)
-                      }
+                      onChange={(event) => setAmount(event.target.value)}
                       onKeyDown={(event) => {
                         if (event.key === "Enter") {
                           void handleDeposit();
                         }
                       }}
                       placeholder="0.00"
-                      className="min-h-14 w-full rounded-2xl border border-slate-300 bg-white py-3 pl-10 pr-4 text-lg font-semibold text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                      className="min-h-14 w-full rounded-2xl border border-slate-300 bg-white py-3 pl-16 pr-4 text-lg font-semibold text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
                     />
                   </div>
                 </div>
@@ -666,62 +794,65 @@ export default function WalletPage() {
           <section className="mb-8 grid gap-5 md:grid-cols-3">
             <SummaryCard
               label={
-                isFrench ? "Solde disponible" : "Available balance"
+                isFrench
+                  ? `Solde ${activeCurrency}`
+                  : `${activeCurrency} balance`
               }
               value={
                 isLoading
                   ? "—"
-                  : formatCurrency(balance)
+                  : displayMoney(
+                      Number(activeWallet?.balance ?? 0),
+                      activeCurrency
+                    )
               }
               icon="💰"
               helperText={
-                isFrench
-                  ? "Solde actuel du portefeuille"
-                  : "Current wallet balance"
+                activeCurrency === preferredCurrency
+                  ? isFrench
+                    ? "Compte principal"
+                    : "Primary account"
+                  : isFrench
+                    ? "Compte en devise"
+                    : "Currency account"
               }
             />
 
             <SummaryCard
-              label={
-                isFrench ? "Total des dépôts" : "Total deposits"
-              }
+              label={isFrench ? "Total des dépôts" : "Total deposits"}
               value={
                 isLoading
                   ? "—"
-                  : formatCurrency(totalDeposits)
+                  : displayMoney(totalDeposits, activeCurrency)
               }
               icon="↓"
               helperText={
                 isFrench
-                  ? `${transactions.filter(
+                  ? `${selectedCurrencyTransactions.filter(
                       (transaction) =>
                         transaction.transaction_type.toLowerCase() ===
                         "deposit"
-                    ).length} opération(s)`
-                  : `${transactions.filter(
+                    ).length} opération(s) en ${activeCurrency}`
+                  : `${selectedCurrencyTransactions.filter(
                       (transaction) =>
                         transaction.transaction_type.toLowerCase() ===
                         "deposit"
-                    ).length} transaction(s)`
+                    ).length} ${activeCurrency} transaction(s)`
               }
             />
 
             <SummaryCard
-              label={
-                isFrench
-                  ? "Fonds envoyés"
-                  : "Outgoing funds"
-              }
+              label={isFrench ? "Fonds envoyés" : "Outgoing funds"}
               value={
                 isLoading
                   ? "—"
-                  : formatCurrency(totalOutgoing)
+                  : displayMoney(totalOutgoing, activeCurrency)
               }
               icon="↗"
               helperText={
                 isFrench
-                  ? "Transferts et retraits"
-                  : "Transfers and withdrawals"
+                  ? `Transferts et retraits en ${activeCurrency}`
+                  : `Transfers and withdrawals in ${activeCurrency}`
               }
             />
           </section>
@@ -735,11 +866,10 @@ export default function WalletPage() {
                       ? "Historique des transactions"
                       : "Transaction history"}
                   </h2>
-
                   <p className="mt-1 text-sm text-slate-600">
                     {isFrench
-                      ? "Consultez les opérations récentes de votre portefeuille."
-                      : "Review your recent wallet activity."}
+                      ? "Consultez les opérations récentes de tous vos comptes en devises."
+                      : "Review activity across all of your currency accounts."}
                   </p>
                 </div>
 
@@ -757,13 +887,11 @@ export default function WalletPage() {
                     id="transaction-search"
                     type="search"
                     value={searchTerm}
-                    onChange={(event) =>
-                      setSearchTerm(event.target.value)
-                    }
+                    onChange={(event) => setSearchTerm(event.target.value)}
                     placeholder={
                       isFrench
-                        ? "Rechercher une transaction..."
-                        : "Search transactions..."
+                        ? "Rechercher une transaction ou une devise..."
+                        : "Search transaction or currency..."
                     }
                     className="min-h-11 w-full rounded-xl border border-slate-300 bg-slate-50 px-4 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-100"
                   />
@@ -800,12 +928,10 @@ export default function WalletPage() {
                     className="flex animate-pulse items-center gap-4 rounded-2xl border border-slate-100 p-4"
                   >
                     <div className="h-12 w-12 rounded-2xl bg-slate-200" />
-
                     <div className="flex-1">
                       <div className="h-4 w-32 rounded bg-slate-200" />
                       <div className="mt-2 h-3 w-48 rounded bg-slate-100" />
                     </div>
-
                     <div className="h-5 w-24 rounded bg-slate-200" />
                   </div>
                 ))}
@@ -815,7 +941,6 @@ export default function WalletPage() {
                 <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100 text-3xl">
                   📄
                 </div>
-
                 <h3 className="mt-5 text-lg font-bold text-slate-900">
                   {transactions.length === 0
                     ? isFrench
@@ -825,7 +950,6 @@ export default function WalletPage() {
                       ? "Aucun résultat"
                       : "No matching transactions"}
                 </h3>
-
                 <p className="mx-auto mt-2 max-w-md text-sm text-slate-600">
                   {transactions.length === 0
                     ? isFrench
@@ -842,10 +966,9 @@ export default function WalletPage() {
                   const style = getTransactionStyle(
                     transaction.transaction_type
                   );
-
-                  const amountValue = Number(
-                    transaction.amount ?? 0
-                  );
+                  const amountValue = Number(transaction.amount ?? 0);
+                  const transactionCurrency =
+                    transaction.currency || "USD";
 
                   return (
                     <article
@@ -865,14 +988,12 @@ export default function WalletPage() {
                               {transaction.description ||
                                 transaction.transaction_type}
                             </h3>
-
                             <span
                               className={`rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${style.badgeClass}`}
                             >
                               {transaction.transaction_type}
                             </span>
                           </div>
-
                           <p className="mt-1 text-sm text-slate-500">
                             {formatDate(transaction.created_at)}
                           </p>
@@ -884,14 +1005,13 @@ export default function WalletPage() {
                           className={`text-lg font-bold ${style.amountClass}`}
                         >
                           {style.prefix}
-                          {formatCurrency(
+                          {displayMoney(
                             amountValue,
-                            transaction.currency || "USD"
+                            transactionCurrency
                           )}
                         </p>
-
                         <p className="mt-1 text-xs font-medium uppercase tracking-wide text-slate-400">
-                          {transaction.currency || "USD"}
+                          {transactionCurrency}
                         </p>
                       </div>
                     </article>
@@ -923,17 +1043,11 @@ function SummaryCard({
     <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="text-sm font-medium text-slate-500">
-            {label}
-          </p>
-
+          <p className="text-sm font-medium text-slate-500">{label}</p>
           <p className="mt-3 text-2xl font-bold tracking-tight text-slate-950">
             {value}
           </p>
-
-          <p className="mt-2 text-xs text-slate-500">
-            {helperText}
-          </p>
+          <p className="mt-2 text-xs text-slate-500">{helperText}</p>
         </div>
 
         <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-50 text-xl text-emerald-700">
