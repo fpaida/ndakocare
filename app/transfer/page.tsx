@@ -228,16 +228,6 @@ function getCountryCurrency(
   return "";
 }
 
-function createTransferReference(): string {
-  const timestamp = Date.now().toString(36).toUpperCase();
-
-  const randomPart = Math.random()
-    .toString(36)
-    .slice(2, 8)
-    .toUpperCase();
-
-  return `NDC-${timestamp}-${randomPart}`;
-}
 
 export default function TransferPage() {
   const { language } = useLanguage();
@@ -626,6 +616,10 @@ export default function TransferPage() {
       return;
     }
 
+    /*
+     * Cross-currency transfers remain blocked until the
+     * NdakoCare FX engine supplies a trusted exchange quote.
+     */
     if (requiresCurrencyConversion) {
       setErrorMessage(
         isFrench
@@ -635,6 +629,11 @@ export default function TransferPage() {
       return;
     }
 
+    /*
+     * This client-side balance check improves the user
+     * experience. The database RPC performs the authoritative
+     * balance check again while holding a row lock.
+     */
     if (totalDebit > balance) {
       setErrorMessage(
         isFrench
@@ -698,225 +697,121 @@ export default function TransferPage() {
       }
 
       /*
-       * Re-read the selected currency balance immediately
-       * before sending to reduce stale-balance risk.
+       * The PostgreSQL function performs the financial operation
+       * atomically:
+       *
+       * 1. authenticate the user with auth.uid()
+       * 2. lock the selected wallet row
+       * 3. verify available funds
+       * 4. create the transfer
+       * 5. debit the wallet balance
+       * 6. create the financial-ledger entry
+       *
+       * If any database step fails, PostgreSQL rolls back the
+       * entire function call.
        */
-      const {
-        data: latestWallet,
-        error: walletReadError,
-      } = await supabase
-        .from("wallet_balances")
-        .select(
-          "id, user_id, currency, balance, created_at"
-        )
-        .eq("user_id", session.user.id)
-        .eq("currency", selectedCurrency)
-        .maybeSingle();
+      const { data, error: transferError } =
+        await supabase.rpc(
+          "ndakocare_create_transfer",
+          {
+            p_source_currency:
+              selectedCurrency,
+            p_recipient_name:
+              selectedBeneficiary.name,
+            p_phone:
+              selectedBeneficiary.phone,
+            p_country:
+              selectedBeneficiary.country,
+            p_method:
+              selectedBeneficiary.provider ||
+              "Ndako Wallet",
+            p_relationship:
+              selectedBeneficiary.relationship ||
+              "",
+            p_purpose:
+              purpose.trim() ||
+              "Family Support",
+            p_notes:
+              notes.trim() ||
+              `Transfer to ${selectedBeneficiary.name}`,
+            p_source_amount:
+              transferAmount,
+            p_fee:
+              transferFee,
+            p_destination_currency:
+              destinationCurrency,
+            p_exchange_rate:
+              1,
+          }
+        );
 
-      if (walletReadError) {
-        throw walletReadError;
+      if (transferError) {
+        throw transferError;
       }
 
-      if (!latestWallet) {
+      const result =
+        data as
+          | {
+              success?: boolean;
+              transfer_id?: string;
+              transaction_id?: string;
+              reference?: string;
+              status?: string;
+              source_currency?: string;
+              source_amount?: number | string;
+              fee?: number | string;
+              total_debit?: number | string;
+              balance_before?: number | string;
+              balance_after?: number | string;
+              exchange_rate?: number | string;
+              destination_currency?: string;
+              destination_amount?: number | string;
+            }
+          | null;
+
+      if (!result?.success) {
         throw new Error(
           isFrench
-            ? "Le compte source sélectionné est introuvable."
-            : "The selected source account could not be found."
+            ? "Le moteur de transfert n'a pas confirmé l'opération."
+            : "The transfer engine did not confirm the transaction."
         );
       }
 
-      const latestBalance =
-        Number(latestWallet.balance) || 0;
+      const returnedBalance =
+        Number(result.balance_after);
 
-      if (totalDebit > latestBalance) {
+      if (Number.isFinite(returnedBalance)) {
         setWalletBalances((current) =>
           current.map((wallet) =>
-            wallet.currency === selectedCurrency
+            wallet.currency ===
+            selectedCurrency
               ? {
                   ...wallet,
-                  balance: latestBalance,
+                  balance: returnedBalance,
                 }
               : wallet
           )
         );
-
-        throw new Error(
-          isFrench
-            ? "Votre solde a changé et n'est plus suffisant pour ce transfert."
-            : "Your balance changed and is no longer sufficient for this transfer."
-        );
       }
 
-      const newBalance =
-        latestBalance - totalDebit;
-
-      const transferReference =
-        createTransferReference();
-
-      /*
-       * STEP 1
-       * Debit only the selected currency account.
-       *
-       * Production evolution:
-       * This debit + transfer creation + transaction log
-       * should ultimately move into a PostgreSQL RPC so the
-       * database executes them atomically.
-       */
-      const { error: walletUpdateError } =
-        await supabase
-          .from("wallet_balances")
-          .update({
-            balance: newBalance,
-          })
-          .eq("user_id", session.user.id)
-          .eq("currency", selectedCurrency);
-
-      if (walletUpdateError) {
-        throw walletUpdateError;
-      }
-
-      /*
-       * STEP 2
-       * Create the transfer record.
-       *
-       * Cross-currency transfers are blocked above until
-       * the FX engine is integrated, so source and transfer
-       * currency are identical in this version.
-       */
-      const { error: transferError } =
-        await supabase
-          .from("transfers")
-          .insert([
-            {
-              user_id: session.user.id,
-              recipient_name:
-                selectedBeneficiary.name,
-              phone: selectedBeneficiary.phone,
-              country:
-                selectedBeneficiary.country,
-
-              // Legacy/current display fields
-              amount: transferAmount,
-              currency: selectedCurrency,
-
-              // Financial audit fields
-              reference: transferReference,
-              source_amount: transferAmount,
-              source_currency: selectedCurrency,
-              fee: transferFee,
-              total_debit: totalDebit,
-              exchange_rate: 1,
-              destination_amount: transferAmount,
-              destination_currency:
-                destinationCurrency,
-
-              // Delivery / business context
-              method:
-                selectedBeneficiary.provider ||
-                "Ndako Wallet",
-              provider_reference: null,
-              notes:
-                notes.trim() ||
-                `Transfer to ${selectedBeneficiary.name}`,
-              status: "Pending",
-              purpose:
-                purpose.trim() ||
-                "Family Support",
-              relationship:
-                selectedBeneficiary.relationship ||
-                "",
-              completed_at: null,
-            },
-          ]);
-
-      if (transferError) {
-        /*
-         * Restore the source balance if the transfer
-         * record could not be created.
-         */
-        const { error: rollbackError } =
-          await supabase
-            .from("wallet_balances")
-            .update({
-              balance: latestBalance,
-            })
-            .eq("user_id", session.user.id)
-            .eq(
-              "currency",
-              selectedCurrency
-            );
-
-        if (rollbackError) {
-          console.error(
-            "Transfer rollback failed:",
-            rollbackError.message
-          );
-        }
-
-        throw transferError;
-      }
-
-      /*
-       * STEP 3
-       * Record the wallet debit in the same currency.
-       */
-      const transactionDescription =
-        isFrench
-          ? `Transfert à ${selectedBeneficiary.name} — Référence ${transferReference}`
-          : `Transfer to ${selectedBeneficiary.name} — Reference ${transferReference}`;
-
-      const { error: transactionError } =
-        await supabase
-          .from("wallet_transactions")
-          .insert([
-            {
-              user_id: session.user.id,
-              transaction_type: "Transfer",
-              amount: totalDebit,
-              currency: selectedCurrency,
-              description:
-                transactionDescription,
-            },
-          ]);
-
-      if (transactionError) {
-        /*
-         * Do not restore the balance here.
-         * The transfer record has already been created.
-         * Restoring the balance could create free money.
-         */
-        console.error(
-          "Wallet transaction logging error:",
-          transactionError.message
-        );
-
-        setErrorMessage(
-          isFrench
-            ? `Le transfert a été créé, mais l'écriture dans l'historique du portefeuille a échoué : ${transactionError.message}`
-            : `The transfer was created, but the wallet history entry failed: ${transactionError.message}`
-        );
-      }
-
-      setWalletBalances((current) =>
-        current.map((wallet) =>
-          wallet.currency ===
-          selectedCurrency
-            ? {
-                ...wallet,
-                balance: newBalance,
-              }
-            : wallet
-        )
-      );
+      const reference =
+        result.reference ||
+        (isFrench
+          ? "Référence indisponible"
+          : "Reference unavailable");
 
       resetTransferForm();
 
       setSuccessMessage(
         isFrench
-          ? `Transfert envoyé avec succès. Référence : ${transferReference}`
-          : `Transfer sent successfully. Reference: ${transferReference}`
+          ? `Transfert envoyé avec succès. Référence : ${reference}`
+          : `Transfer sent successfully. Reference: ${reference}`
       );
 
+      /*
+       * Reload balances and beneficiaries from Supabase so the
+       * UI reflects the authoritative database state.
+       */
       await loadData();
     } catch (error) {
       setErrorMessage(
