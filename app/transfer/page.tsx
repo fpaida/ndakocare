@@ -10,6 +10,10 @@ import {
 import Navbar from "../components/Navbar";
 import { useLanguage } from "../context/LanguageContext";
 import { supabase } from "../lib/supabase";
+import {
+  formatCurrency,
+  getCurrencyName,
+} from "../lib/currency";
 
 import * as AfricaLibrary from "../lib/africa";
 import * as ProvidersLibrary from "../lib/providers";
@@ -25,11 +29,12 @@ type Beneficiary = {
   created_at?: string;
 };
 
-type WalletRecord = {
-  id?: string;
+type WalletBalance = {
+  id: string;
   user_id: string;
+  currency: string;
   balance: number | string;
-  currency?: string | null;
+  created_at: string;
 };
 
 type CountryRecord = {
@@ -126,7 +131,7 @@ function getLocalizedCountryName(
         return result;
       }
     } catch {
-      // Use fallback fields.
+      // Use fallback fields below.
     }
   }
 
@@ -169,7 +174,7 @@ function getLocalizedProviderName(
         return result;
       }
     } catch {
-      // Use fallback fields.
+      // Use fallback fields below.
     }
   }
 
@@ -223,22 +228,6 @@ function getCountryCurrency(
   return "";
 }
 
-function formatMoney(
-  value: number,
-  currency: string
-): string {
-  try {
-    return new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency,
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(value);
-  } catch {
-    return `${value.toFixed(2)} ${currency}`;
-  }
-}
-
 function createTransferReference(): string {
   const timestamp = Date.now().toString(36).toUpperCase();
 
@@ -252,21 +241,27 @@ function createTransferReference(): string {
 
 export default function TransferPage() {
   const { language } = useLanguage();
+  const isFrench = language === "fr";
 
-  const [beneficiaries, setBeneficiaries] = useState<
-    Beneficiary[]
-  >([]);
+  const [beneficiaries, setBeneficiaries] =
+    useState<Beneficiary[]>([]);
+
+  const [walletBalances, setWalletBalances] =
+    useState<WalletBalance[]>([]);
+
+  const [preferredCurrency, setPreferredCurrency] =
+    useState("USD");
+
+  const [selectedCurrency, setSelectedCurrency] =
+    useState("USD");
 
   const [selectedBeneficiaryId, setSelectedBeneficiaryId] =
     useState("");
 
   const [amount, setAmount] = useState("");
-  const [purpose, setPurpose] = useState("Family Support");
+  const [purpose, setPurpose] =
+    useState("Family Support");
   const [notes, setNotes] = useState("");
-
-  const [balance, setBalance] = useState(0);
-  const [walletCurrency, setWalletCurrency] =
-    useState("USD");
 
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
@@ -315,14 +310,22 @@ export default function TransferPage() {
       (provider) =>
         provider.id === selectedBeneficiary.provider ||
         provider.name === selectedBeneficiary.provider ||
-        provider.nameEn ===
-          selectedBeneficiary.provider ||
-        provider.nameFr ===
-          selectedBeneficiary.provider ||
-        provider.displayName ===
-          selectedBeneficiary.provider
+        provider.nameEn === selectedBeneficiary.provider ||
+        provider.nameFr === selectedBeneficiary.provider ||
+        provider.displayName === selectedBeneficiary.provider
     );
   }, [providers, selectedBeneficiary]);
+
+  const selectedWallet = useMemo(() => {
+    return walletBalances.find(
+      (wallet) =>
+        wallet.currency === selectedCurrency
+    );
+  }, [walletBalances, selectedCurrency]);
+
+  const balance = Number(
+    selectedWallet?.balance ?? 0
+  );
 
   const beneficiaryCountryName = useMemo(() => {
     if (!selectedBeneficiary) {
@@ -345,7 +348,7 @@ export default function TransferPage() {
 
   const beneficiaryProviderName = useMemo(() => {
     if (!selectedBeneficiary?.provider) {
-      return language === "fr"
+      return isFrench
         ? "Portefeuille NdakoCare"
         : "NdakoCare Wallet";
     }
@@ -359,6 +362,7 @@ export default function TransferPage() {
       language
     );
   }, [
+    isFrench,
     language,
     selectedBeneficiary,
     selectedProvider,
@@ -367,9 +371,13 @@ export default function TransferPage() {
   const destinationCurrency = useMemo(() => {
     return (
       getCountryCurrency(selectedCountry) ||
-      walletCurrency
+      selectedCurrency
     );
-  }, [selectedCountry, walletCurrency]);
+  }, [selectedCountry, selectedCurrency]);
+
+  const requiresCurrencyConversion =
+    Boolean(selectedBeneficiary) &&
+    destinationCurrency !== selectedCurrency;
 
   const transferAmount = useMemo(() => {
     const parsedAmount = Number(amount);
@@ -382,18 +390,22 @@ export default function TransferPage() {
   }, [amount]);
 
   /*
-   * Current fee rule:
-   * 1% of the transfer amount with a minimum fee of $1.
+   * Temporary V1 fee rule:
+   * 1% of the transfer amount with a minimum
+   * of 1 unit of the selected source currency.
    *
-   * This is temporary business logic. Later it can be
-   * replaced with provider-specific pricing.
+   * This will later be replaced by the NdakoCare
+   * pricing / provider fee engine.
    */
   const transferFee = useMemo(() => {
     if (transferAmount <= 0) {
       return 0;
     }
 
-    return Math.max(1, transferAmount * 0.01);
+    return Math.max(
+      1,
+      transferAmount * 0.01
+    );
   }, [transferAmount]);
 
   const totalDebit = useMemo(() => {
@@ -404,81 +416,170 @@ export default function TransferPage() {
     return balance - totalDebit;
   }, [balance, totalDebit]);
 
+  const money = useCallback(
+    (value: number, currency: string) =>
+      formatCurrency(
+        value,
+        currency,
+        isFrench ? "fr" : "en"
+      ),
+    [isFrench]
+  );
+
   const loadData = useCallback(async () => {
     setIsLoading(true);
     setErrorMessage("");
 
-    const {
-      data: { session },
-      error: sessionError,
-    } = await supabase.auth.getSession();
+    try {
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
 
-    if (sessionError) {
-      setErrorMessage(sessionError.message);
-      setIsLoading(false);
-      return;
-    }
-
-    if (!session) {
-      setErrorMessage(
-        language === "fr"
-          ? "Veuillez vous connecter pour effectuer un transfert."
-          : "Please sign in to make a transfer."
-      );
-
-      setIsLoading(false);
-      return;
-    }
-
-    const [
-      walletResult,
-      beneficiariesResult,
-    ] = await Promise.all([
-      supabase
-        .from("wallets")
-        .select("*")
-        .eq("user_id", session.user.id)
-        .maybeSingle(),
-
-      supabase
-        .from("beneficiaries")
-        .select("*")
-        .eq("user_id", session.user.id)
-        .order("created_at", {
-          ascending: false,
-        }),
-    ]);
-
-    if (walletResult.error) {
-      setErrorMessage(walletResult.error.message);
-    } else if (walletResult.data) {
-      const wallet =
-        walletResult.data as WalletRecord;
-
-      setBalance(Number(wallet.balance) || 0);
-
-      if (wallet.currency) {
-        setWalletCurrency(wallet.currency);
+      if (sessionError) {
+        throw sessionError;
       }
-    } else {
-      setBalance(0);
-    }
 
-    if (beneficiariesResult.error) {
-      setErrorMessage(
-        beneficiariesResult.error.message
-      );
+      if (!session) {
+        setErrorMessage(
+          isFrench
+            ? "Veuillez vous connecter pour effectuer un transfert."
+            : "Please sign in to make a transfer."
+        );
 
-      setBeneficiaries([]);
-    } else {
+        return;
+      }
+
+      const userId = session.user.id;
+
+      const { data: profile, error: profileError } =
+        await supabase
+          .from("profiles")
+          .select("preferred_currency")
+          .eq("id", userId)
+          .maybeSingle();
+
+      if (profileError) {
+        throw profileError;
+      }
+
+      const profileCurrency =
+        profile?.preferred_currency || "USD";
+
+      setPreferredCurrency(profileCurrency);
+
+      const { error: ensureWalletError } =
+        await supabase
+          .from("wallet_balances")
+          .upsert(
+            {
+              user_id: userId,
+              currency: profileCurrency,
+              balance: 0,
+            },
+            {
+              onConflict: "user_id,currency",
+              ignoreDuplicates: true,
+            }
+          );
+
+      if (ensureWalletError) {
+        throw ensureWalletError;
+      }
+
+      const [
+        balancesResult,
+        beneficiariesResult,
+      ] = await Promise.all([
+        supabase
+          .from("wallet_balances")
+          .select(
+            "id, user_id, currency, balance, created_at"
+          )
+          .eq("user_id", userId)
+          .order("currency", {
+            ascending: true,
+          }),
+
+        supabase
+          .from("beneficiaries")
+          .select("*")
+          .eq("user_id", userId)
+          .order("created_at", {
+            ascending: false,
+          }),
+      ]);
+
+      if (balancesResult.error) {
+        throw balancesResult.error;
+      }
+
+      const balances =
+        (balancesResult.data ||
+          []) as WalletBalance[];
+
+      setWalletBalances(balances);
+
+      setSelectedCurrency((currentCurrency) => {
+        const preferredExists =
+          balances.some(
+            (wallet) =>
+              wallet.currency === profileCurrency
+          );
+
+        /*
+         * On first load, default to the user's preferred
+         * currency. After the user chooses another account,
+         * preserve that selection while it still exists.
+         */
+        if (
+          currentCurrency === "USD" &&
+          profileCurrency !== "USD" &&
+          preferredExists
+        ) {
+          return profileCurrency;
+        }
+
+        const currentStillExists =
+          balances.some(
+            (wallet) =>
+              wallet.currency === currentCurrency
+          );
+
+        if (currentStillExists) {
+          return currentCurrency;
+        }
+
+        if (preferredExists) {
+          return profileCurrency;
+        }
+
+        return (
+          balances[0]?.currency ||
+          profileCurrency
+        );
+      });
+
+      if (beneficiariesResult.error) {
+        throw beneficiariesResult.error;
+      }
+
       setBeneficiaries(
         (beneficiariesResult.data ||
           []) as Beneficiary[]
       );
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : isFrench
+            ? "Une erreur est survenue pendant le chargement."
+            : "An error occurred while loading transfer information."
+      );
+    } finally {
+      setIsLoading(false);
     }
-
-    setIsLoading(false);
-  }, [language]);
+  }, [isFrench]);
 
   useEffect(() => {
     void loadData();
@@ -497,7 +598,7 @@ export default function TransferPage() {
 
     if (!selectedBeneficiary) {
       setErrorMessage(
-        language === "fr"
+        isFrench
           ? "Veuillez choisir un bénéficiaire."
           : "Please select a beneficiary."
       );
@@ -509,344 +610,487 @@ export default function TransferPage() {
       transferAmount <= 0
     ) {
       setErrorMessage(
-        language === "fr"
+        isFrench
           ? "Veuillez saisir un montant valide."
           : "Please enter a valid amount."
       );
       return;
     }
 
+    if (!selectedWallet) {
+      setErrorMessage(
+        isFrench
+          ? "Le compte source sélectionné est introuvable."
+          : "The selected source account could not be found."
+      );
+      return;
+    }
+
+    if (requiresCurrencyConversion) {
+      setErrorMessage(
+        isFrench
+          ? `Ce transfert nécessite une conversion ${selectedCurrency} vers ${destinationCurrency}. Le moteur de change NdakoCare n'est pas encore activé pour les transferts.`
+          : `This transfer requires ${selectedCurrency} to ${destinationCurrency} conversion. The NdakoCare FX engine is not yet enabled for transfers.`
+      );
+      return;
+    }
+
     if (totalDebit > balance) {
       setErrorMessage(
-        language === "fr"
-          ? `Solde insuffisant. Le montant total requis est de ${formatMoney(
+        isFrench
+          ? `Solde insuffisant. Le montant total requis est de ${money(
               totalDebit,
-              walletCurrency
+              selectedCurrency
             )}.`
-          : `Insufficient balance. The total required is ${formatMoney(
+          : `Insufficient balance. The total required is ${money(
               totalDebit,
-              walletCurrency
+              selectedCurrency
             )}.`
       );
       return;
     }
 
     const confirmationMessage =
-      language === "fr"
-        ? `Confirmer l’envoi de ${formatMoney(
+      isFrench
+        ? `Confirmer l'envoi de ${money(
             transferAmount,
-            walletCurrency
-          )} à ${selectedBeneficiary.name} ?\n\nFrais : ${formatMoney(
+            selectedCurrency
+          )} à ${selectedBeneficiary.name} ?\n\nFrais : ${money(
             transferFee,
-            walletCurrency
-          )}\nTotal débité : ${formatMoney(
+            selectedCurrency
+          )}\nTotal débité : ${money(
             totalDebit,
-            walletCurrency
+            selectedCurrency
           )}`
-        : `Confirm sending ${formatMoney(
+        : `Confirm sending ${money(
             transferAmount,
-            walletCurrency
-          )} to ${selectedBeneficiary.name}?\n\nFee: ${formatMoney(
+            selectedCurrency
+          )} to ${selectedBeneficiary.name}?\n\nFee: ${money(
             transferFee,
-            walletCurrency
-          )}\nTotal debit: ${formatMoney(
+            selectedCurrency
+          )}\nTotal debit: ${money(
             totalDebit,
-            walletCurrency
+            selectedCurrency
           )}`;
 
-    const confirmed =
-      window.confirm(confirmationMessage);
-
-    if (!confirmed) {
+    if (!window.confirm(confirmationMessage)) {
       return;
     }
 
     setIsSending(true);
 
-    const {
-      data: { session },
-      error: sessionError,
-    } = await supabase.auth.getSession();
+    try {
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
 
-    if (sessionError) {
-      setErrorMessage(sessionError.message);
-      setIsSending(false);
-      return;
-    }
+      if (sessionError) {
+        throw sessionError;
+      }
 
-    if (!session) {
-      setErrorMessage(
-        language === "fr"
-          ? "Votre session a expiré. Veuillez vous reconnecter."
-          : "Your session has expired. Please sign in again."
-      );
+      if (!session) {
+        throw new Error(
+          isFrench
+            ? "Votre session a expiré. Veuillez vous reconnecter."
+            : "Your session has expired. Please sign in again."
+        );
+      }
 
-      setIsSending(false);
-      return;
-    }
-
-    /*
-     * Re-read the wallet immediately before sending.
-     * This reduces the chance of using a stale balance.
-     */
-    const { data: latestWallet, error: walletReadError } =
-      await supabase
-        .from("wallets")
-        .select("*")
+      /*
+       * Re-read the selected currency balance immediately
+       * before sending to reduce stale-balance risk.
+       */
+      const {
+        data: latestWallet,
+        error: walletReadError,
+      } = await supabase
+        .from("wallet_balances")
+        .select(
+          "id, user_id, currency, balance, created_at"
+        )
         .eq("user_id", session.user.id)
+        .eq("currency", selectedCurrency)
         .maybeSingle();
 
-    if (walletReadError) {
-      setErrorMessage(walletReadError.message);
-      setIsSending(false);
-      return;
-    }
+      if (walletReadError) {
+        throw walletReadError;
+      }
 
-    if (!latestWallet) {
-      setErrorMessage(
-        language === "fr"
-          ? "Aucun portefeuille n’a été trouvé."
-          : "No wallet was found."
-      );
+      if (!latestWallet) {
+        throw new Error(
+          isFrench
+            ? "Le compte source sélectionné est introuvable."
+            : "The selected source account could not be found."
+        );
+      }
 
-      setIsSending(false);
-      return;
-    }
+      const latestBalance =
+        Number(latestWallet.balance) || 0;
 
-    const latestBalance =
-      Number(latestWallet.balance) || 0;
+      if (totalDebit > latestBalance) {
+        setWalletBalances((current) =>
+          current.map((wallet) =>
+            wallet.currency === selectedCurrency
+              ? {
+                  ...wallet,
+                  balance: latestBalance,
+                }
+              : wallet
+          )
+        );
 
-    if (totalDebit > latestBalance) {
-      setBalance(latestBalance);
+        throw new Error(
+          isFrench
+            ? "Votre solde a changé et n'est plus suffisant pour ce transfert."
+            : "Your balance changed and is no longer sufficient for this transfer."
+        );
+      }
 
-      setErrorMessage(
-        language === "fr"
-          ? "Votre solde a changé et n’est plus suffisant pour ce transfert."
-          : "Your balance changed and is no longer sufficient for this transfer."
-      );
+      const newBalance =
+        latestBalance - totalDebit;
 
-      setIsSending(false);
-      return;
-    }
+      const transferReference =
+        createTransferReference();
 
-    const newBalance =
-      latestBalance - totalDebit;
-
-    const transferReference =
-      createTransferReference();
-
-    /*
-     * Step 1: Deduct the wallet balance.
-     *
-     * A future production version should move these database
-     * operations into one Supabase/PostgreSQL RPC transaction.
-     */
-    const { error: walletUpdateError } =
-      await supabase
-        .from("wallets")
-        .update({
-          balance: newBalance,
-        })
-        .eq("user_id", session.user.id);
-
-    if (walletUpdateError) {
-      setErrorMessage(walletUpdateError.message);
-      setIsSending(false);
-      return;
-    }
-
-    /*
-     * Step 2: Create the transfer.
-     *
-     * Currency remains the wallet currency because live
-     * foreign-exchange conversion is not active yet.
-     */
-    const { error: transferError } =
-      await supabase
-        .from("transfers")
-        .insert([
-          {
-            user_id: session.user.id,
-            recipient_name:
-              selectedBeneficiary.name,
-            phone: selectedBeneficiary.phone,
-            country: selectedBeneficiary.country,
-            amount: transferAmount,
-            method:
-              selectedBeneficiary.provider ||
-              "Ndako Wallet",
-            notes:
-              notes.trim() ||
-              `Transfer to ${selectedBeneficiary.name}`,
-            status: "Pending",
-            currency: walletCurrency,
-            purpose:
-              purpose.trim() || "Family Support",
-            relationship:
-              selectedBeneficiary.relationship || "",
-          },
-        ]);
-
-    if (transferError) {
       /*
-       * Attempt to restore the balance because the transfer
-       * record could not be created.
+       * STEP 1
+       * Debit only the selected currency account.
+       *
+       * Production evolution:
+       * This debit + transfer creation + transaction log
+       * should ultimately move into a PostgreSQL RPC so the
+       * database executes them atomically.
        */
-      await supabase
-        .from("wallets")
-        .update({
-          balance: latestBalance,
-        })
-        .eq("user_id", session.user.id);
+      const { error: walletUpdateError } =
+        await supabase
+          .from("wallet_balances")
+          .update({
+            balance: newBalance,
+          })
+          .eq("user_id", session.user.id)
+          .eq("currency", selectedCurrency);
 
-      setBalance(latestBalance);
-      setErrorMessage(transferError.message);
-      setIsSending(false);
-      return;
-    }
+      if (walletUpdateError) {
+        throw walletUpdateError;
+      }
 
-    /*
-     * Step 3: Create the wallet transaction record.
-     */
-    const transactionDescription =
-      language === "fr"
-        ? `Transfert à ${selectedBeneficiary.name} — Référence ${transferReference}`
-        : `Transfer to ${selectedBeneficiary.name} — Reference ${transferReference}`;
-
-    const { error: transactionError } =
-      await supabase
-        .from("wallet_transactions")
-        .insert([
-          {
-            user_id: session.user.id,
-            transaction_type: "Transfer",
-            amount: totalDebit,
-            currency: walletCurrency,
-            description: transactionDescription,
-          },
-        ]);
-
-    if (transactionError) {
       /*
-       * The transfer and wallet deduction already succeeded.
-       * Do not restore the balance here because doing so could
-       * create free money. Report the logging problem instead.
+       * STEP 2
+       * Create the transfer record.
+       *
+       * Cross-currency transfers are blocked above until
+       * the FX engine is integrated, so source and transfer
+       * currency are identical in this version.
        */
-      console.error(
-        "Wallet transaction logging error:",
-        transactionError
+      const { error: transferError } =
+        await supabase
+          .from("transfers")
+          .insert([
+            {
+              user_id: session.user.id,
+              recipient_name:
+                selectedBeneficiary.name,
+              phone: selectedBeneficiary.phone,
+              country:
+                selectedBeneficiary.country,
+
+              // Legacy/current display fields
+              amount: transferAmount,
+              currency: selectedCurrency,
+
+              // Financial audit fields
+              reference: transferReference,
+              source_amount: transferAmount,
+              source_currency: selectedCurrency,
+              fee: transferFee,
+              total_debit: totalDebit,
+              exchange_rate: 1,
+              destination_amount: transferAmount,
+              destination_currency:
+                destinationCurrency,
+
+              // Delivery / business context
+              method:
+                selectedBeneficiary.provider ||
+                "Ndako Wallet",
+              provider_reference: null,
+              notes:
+                notes.trim() ||
+                `Transfer to ${selectedBeneficiary.name}`,
+              status: "Pending",
+              purpose:
+                purpose.trim() ||
+                "Family Support",
+              relationship:
+                selectedBeneficiary.relationship ||
+                "",
+              completed_at: null,
+            },
+          ]);
+
+      if (transferError) {
+        /*
+         * Restore the source balance if the transfer
+         * record could not be created.
+         */
+        const { error: rollbackError } =
+          await supabase
+            .from("wallet_balances")
+            .update({
+              balance: latestBalance,
+            })
+            .eq("user_id", session.user.id)
+            .eq(
+              "currency",
+              selectedCurrency
+            );
+
+        if (rollbackError) {
+          console.error(
+            "Transfer rollback failed:",
+            rollbackError.message
+          );
+        }
+
+        throw transferError;
+      }
+
+      /*
+       * STEP 3
+       * Record the wallet debit in the same currency.
+       */
+      const transactionDescription =
+        isFrench
+          ? `Transfert à ${selectedBeneficiary.name} — Référence ${transferReference}`
+          : `Transfer to ${selectedBeneficiary.name} — Reference ${transferReference}`;
+
+      const { error: transactionError } =
+        await supabase
+          .from("wallet_transactions")
+          .insert([
+            {
+              user_id: session.user.id,
+              transaction_type: "Transfer",
+              amount: totalDebit,
+              currency: selectedCurrency,
+              description:
+                transactionDescription,
+            },
+          ]);
+
+      if (transactionError) {
+        /*
+         * Do not restore the balance here.
+         * The transfer record has already been created.
+         * Restoring the balance could create free money.
+         */
+        console.error(
+          "Wallet transaction logging error:",
+          transactionError.message
+        );
+
+        setErrorMessage(
+          isFrench
+            ? `Le transfert a été créé, mais l'écriture dans l'historique du portefeuille a échoué : ${transactionError.message}`
+            : `The transfer was created, but the wallet history entry failed: ${transactionError.message}`
+        );
+      }
+
+      setWalletBalances((current) =>
+        current.map((wallet) =>
+          wallet.currency ===
+          selectedCurrency
+            ? {
+                ...wallet,
+                balance: newBalance,
+              }
+            : wallet
+        )
       );
 
+      resetTransferForm();
+
+      setSuccessMessage(
+        isFrench
+          ? `Transfert envoyé avec succès. Référence : ${transferReference}`
+          : `Transfer sent successfully. Reference: ${transferReference}`
+      );
+
+      await loadData();
+    } catch (error) {
       setErrorMessage(
-        language === "fr"
-          ? `Le transfert a été créé, mais l’écriture dans l’historique du portefeuille a échoué : ${transactionError.message}`
-          : `The transfer was created, but the wallet history entry failed: ${transactionError.message}`
+        error instanceof Error
+          ? error.message
+          : isFrench
+            ? "Le transfert n'a pas pu être effectué."
+            : "The transfer could not be completed."
       );
+    } finally {
+      setIsSending(false);
     }
-
-    setBalance(newBalance);
-    resetTransferForm();
-
-    setSuccessMessage(
-      language === "fr"
-        ? `Transfert envoyé avec succès. Référence : ${transferReference}`
-        : `Transfer sent successfully. Reference: ${transferReference}`
-    );
-
-    setIsSending(false);
-    await loadData();
   };
 
   return (
     <>
       <Navbar />
 
-      <main className="min-h-screen bg-gray-100 px-4 py-8 sm:px-6 lg:px-8">
-        <div className="mx-auto max-w-5xl">
-          <section className="rounded-3xl bg-white p-6 shadow-lg sm:p-8">
-            <div className="mb-8">
-              <h1 className="text-3xl font-bold text-green-700 sm:text-4xl">
-                {language === "fr"
-                  ? "Transfert d’argent"
-                  : "Money Transfer"}
-              </h1>
+      <main className="min-h-screen bg-slate-50 px-4 py-8 sm:px-6 lg:px-8">
+        <div className="mx-auto max-w-6xl">
+          <section className="mb-8">
+            <p className="mb-2 text-sm font-semibold uppercase tracking-wider text-emerald-700">
+              NDAKOCARE • TRANSFERS
+            </p>
 
-              <p className="mt-2 text-gray-600">
-                {language === "fr"
-                  ? "Sélectionnez un bénéficiaire, saisissez le montant, puis vérifiez les détails avant l’envoi."
-                  : "Select a beneficiary, enter an amount, and review the details before sending."}
-              </p>
+            <h1 className="text-3xl font-bold tracking-tight text-slate-950 sm:text-4xl">
+              {isFrench
+                ? "Transfert d'argent"
+                : "Money Transfer"}
+            </h1>
+
+            <p className="mt-2 max-w-3xl text-slate-600">
+              {isFrench
+                ? "Envoyez de l'argent depuis le compte NdakoCare de votre choix vers un bénéficiaire, localement ou régionalement."
+                : "Send money from the NdakoCare currency account you choose to a beneficiary locally or regionally."}
+            </p>
+          </section>
+
+          {successMessage && (
+            <div
+              role="status"
+              className="mb-6 rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 font-medium text-emerald-800"
+            >
+              {successMessage}
             </div>
+          )}
 
-            {successMessage && (
-              <div
-                role="status"
-                className="mb-6 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-green-800"
-              >
-                {successMessage}
-              </div>
-            )}
+          {errorMessage && (
+            <div
+              role="alert"
+              className="mb-6 rounded-2xl border border-red-200 bg-red-50 px-5 py-4 font-medium text-red-700"
+            >
+              {errorMessage}
+            </div>
+          )}
 
-            {errorMessage && (
-              <div
-                role="alert"
-                className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-red-700"
-              >
-                {errorMessage}
-              </div>
-            )}
+          <section className="mb-8 overflow-hidden rounded-3xl bg-gradient-to-br from-emerald-700 via-emerald-600 to-teal-700 p-6 text-white shadow-xl shadow-emerald-900/10 sm:p-8">
+            <div className="flex flex-col gap-8 lg:flex-row lg:items-end lg:justify-between">
+              <div>
+                <p className="text-sm font-medium text-emerald-100">
+                  {isFrench
+                    ? "Compte source sélectionné"
+                    : "Selected source account"}
+                </p>
 
-            <div className="mb-8 rounded-2xl bg-green-50 p-6">
-              <p className="font-medium text-gray-700">
-                {language === "fr"
-                  ? "Solde disponible"
-                  : "Available balance"}
-              </p>
-
-              <h2 className="mt-2 break-words text-4xl font-bold text-green-700 sm:text-5xl">
-                {formatMoney(
-                  balance,
-                  walletCurrency
+                {isLoading ? (
+                  <div className="mt-3 h-14 w-56 animate-pulse rounded-xl bg-white/20" />
+                ) : (
+                  <h2 className="mt-2 text-4xl font-bold tracking-tight sm:text-5xl">
+                    {money(
+                      balance,
+                      selectedCurrency
+                    )}
+                  </h2>
                 )}
-              </h2>
 
-              <p className="mt-2 text-sm text-gray-600">
-                {language === "fr"
-                  ? `Devise du portefeuille : ${walletCurrency}`
-                  : `Wallet currency: ${walletCurrency}`}
-              </p>
+                <div className="mt-5 flex flex-wrap gap-2">
+                  <span className="rounded-full bg-white/10 px-3 py-1.5 text-sm font-semibold ring-1 ring-white/20">
+                    {selectedCurrency}
+                  </span>
+
+                  {selectedCurrency ===
+                    preferredCurrency && (
+                    <span className="rounded-full bg-white px-3 py-1.5 text-sm font-bold text-emerald-700">
+                      {isFrench
+                        ? "Compte principal"
+                        : "Primary account"}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="w-full lg:max-w-md">
+                <label
+                  htmlFor="source-account"
+                  className="mb-2 block text-sm font-semibold text-emerald-50"
+                >
+                  {isFrench
+                    ? "Choisir le compte source"
+                    : "Choose source account"}
+                </label>
+
+                <select
+                  id="source-account"
+                  value={selectedCurrency}
+                  onChange={(event) => {
+                    setSelectedCurrency(
+                      event.target.value
+                    );
+                    setSuccessMessage("");
+                    setErrorMessage("");
+                  }}
+                  disabled={
+                    isLoading ||
+                    walletBalances.length === 0
+                  }
+                  className="min-h-12 w-full rounded-xl border border-white/30 bg-white px-4 py-3 font-semibold text-slate-900 outline-none"
+                >
+                  {walletBalances.map(
+                    (wallet) => (
+                      <option
+                        key={wallet.id}
+                        value={wallet.currency}
+                      >
+                        {wallet.currency} —{" "}
+                        {getCurrencyName(
+                          wallet.currency
+                        )} —{" "}
+                        {money(
+                          Number(
+                            wallet.balance ?? 0
+                          ),
+                          wallet.currency
+                        )}
+                      </option>
+                    )
+                  )}
+                </select>
+              </div>
             </div>
+          </section>
 
+          <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
             {isLoading ? (
-              <div className="rounded-2xl border border-gray-200 p-8 text-center text-gray-500">
-                {language === "fr"
+              <div className="rounded-2xl border border-slate-200 p-8 text-center text-slate-500">
+                {isFrench
                   ? "Chargement des informations..."
                   : "Loading transfer information..."}
               </div>
             ) : (
               <>
-                <div className="grid gap-5 md:grid-cols-2">
+                <div className="grid gap-6 md:grid-cols-2">
                   <label className="flex flex-col gap-2 md:col-span-2">
-                    <span className="font-medium text-gray-700">
-                      {language === "fr"
+                    <span className="font-semibold text-slate-700">
+                      {isFrench
                         ? "Bénéficiaire"
                         : "Beneficiary"}
                     </span>
 
                     <select
-                      value={selectedBeneficiaryId}
+                      value={
+                        selectedBeneficiaryId
+                      }
                       onChange={(event) => {
                         setSelectedBeneficiaryId(
                           event.target.value
                         );
-
                         setSuccessMessage("");
                         setErrorMessage("");
                       }}
-                      className="rounded-xl border border-gray-300 bg-white p-3 outline-none transition focus:border-green-600 focus:ring-2 focus:ring-green-100"
+                      className="min-h-12 rounded-xl border border-slate-300 bg-white p-3 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
                     >
                       <option value="">
-                        {language === "fr"
+                        {isFrench
                           ? "Choisir un bénéficiaire"
                           : "Select a beneficiary"}
                       </option>
@@ -855,7 +1099,9 @@ export default function TransferPage() {
                         (beneficiary) => (
                           <option
                             key={beneficiary.id}
-                            value={beneficiary.id}
+                            value={
+                              beneficiary.id
+                            }
                           >
                             {beneficiary.name}
                             {beneficiary.provider
@@ -866,137 +1112,169 @@ export default function TransferPage() {
                       )}
                     </select>
 
-                    {beneficiaries.length === 0 && (
+                    {beneficiaries.length ===
+                      0 && (
                       <span className="text-sm text-amber-700">
-                        {language === "fr"
-                          ? "Vous devez d’abord ajouter un bénéficiaire sur la page Bénéficiaires."
+                        {isFrench
+                          ? "Vous devez d'abord ajouter un bénéficiaire sur la page Bénéficiaires."
                           : "You must first add a beneficiary on the Beneficiaries page."}
                       </span>
                     )}
                   </label>
 
                   {selectedBeneficiary && (
-                    <div className="rounded-2xl border border-green-200 bg-green-50 p-5 md:col-span-2">
-                      <h3 className="mb-4 text-xl font-bold text-green-700">
-                        {language === "fr"
-                          ? "Informations du bénéficiaire"
-                          : "Beneficiary information"}
-                      </h3>
-
-                      <dl className="grid gap-4 text-sm sm:grid-cols-2">
+                    <div className="rounded-3xl border border-emerald-200 bg-emerald-50 p-6 md:col-span-2">
+                      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                         <div>
-                          <dt className="text-gray-500">
-                            {language === "fr"
-                              ? "Nom"
-                              : "Name"}
-                          </dt>
+                          <p className="text-xs font-bold uppercase tracking-wider text-emerald-700">
+                            {isFrench
+                              ? "Destination"
+                              : "Destination"}
+                          </p>
 
-                          <dd className="mt-1 font-semibold text-gray-900">
-                            {selectedBeneficiary.name}
-                          </dd>
+                          <h3 className="mt-1 text-xl font-bold text-slate-950">
+                            {
+                              selectedBeneficiary.name
+                            }
+                          </h3>
                         </div>
 
+                        <span className="rounded-full bg-white px-3 py-1.5 text-sm font-bold text-emerald-700 shadow-sm">
+                          {destinationCurrency}
+                        </span>
+                      </div>
+
+                      <dl className="mt-6 grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-3">
                         <div>
-                          <dt className="text-gray-500">
-                            {language === "fr"
+                          <dt className="text-slate-500">
+                            {isFrench
                               ? "Téléphone"
                               : "Phone"}
                           </dt>
-
-                          <dd className="mt-1 font-semibold text-gray-900">
-                            {selectedBeneficiary.phone}
+                          <dd className="mt-1 font-semibold text-slate-900">
+                            {
+                              selectedBeneficiary.phone
+                            }
                           </dd>
                         </div>
 
                         <div>
-                          <dt className="text-gray-500">
-                            {language === "fr"
+                          <dt className="text-slate-500">
+                            {isFrench
                               ? "Pays"
                               : "Country"}
                           </dt>
-
-                          <dd className="mt-1 font-semibold text-gray-900">
-                            {beneficiaryCountryName}
+                          <dd className="mt-1 font-semibold text-slate-900">
+                            {
+                              beneficiaryCountryName
+                            }
                           </dd>
                         </div>
 
                         <div>
-                          <dt className="text-gray-500">
-                            {language === "fr"
+                          <dt className="text-slate-500">
+                            {isFrench
                               ? "Fournisseur"
                               : "Provider"}
                           </dt>
-
-                          <dd className="mt-1 font-semibold text-green-700">
-                            {beneficiaryProviderName}
+                          <dd className="mt-1 font-semibold text-emerald-700">
+                            {
+                              beneficiaryProviderName
+                            }
                           </dd>
                         </div>
 
                         <div>
-                          <dt className="text-gray-500">
-                            {language === "fr"
+                          <dt className="text-slate-500">
+                            {isFrench
                               ? "Relation"
                               : "Relationship"}
                           </dt>
-
-                          <dd className="mt-1 font-semibold text-gray-900">
+                          <dd className="mt-1 font-semibold text-slate-900">
                             {selectedBeneficiary.relationship ||
-                              (language === "fr"
+                              (isFrench
                                 ? "Non précisée"
                                 : "Not specified")}
                           </dd>
                         </div>
 
                         <div>
-                          <dt className="text-gray-500">
-                            {language === "fr"
+                          <dt className="text-slate-500">
+                            {isFrench
+                              ? "Devise source"
+                              : "Source currency"}
+                          </dt>
+                          <dd className="mt-1 font-semibold text-slate-900">
+                            {selectedCurrency}
+                          </dd>
+                        </div>
+
+                        <div>
+                          <dt className="text-slate-500">
+                            {isFrench
                               ? "Devise de destination"
                               : "Destination currency"}
                           </dt>
-
-                          <dd className="mt-1 font-semibold text-gray-900">
-                            {destinationCurrency}
+                          <dd className="mt-1 font-semibold text-slate-900">
+                            {
+                              destinationCurrency
+                            }
                           </dd>
                         </div>
                       </dl>
 
-                      {destinationCurrency !==
-                        walletCurrency && (
-                        <p className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-                          {language === "fr"
-                            ? `La conversion ${walletCurrency} vers ${destinationCurrency} n’est pas encore activée. Ce transfert sera actuellement enregistré en ${walletCurrency}.`
-                            : `${walletCurrency} to ${destinationCurrency} conversion is not active yet. This transfer will currently be recorded in ${walletCurrency}.`}
-                        </p>
+                      {requiresCurrencyConversion && (
+                        <div className="mt-5 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+                          <p className="font-bold">
+                            {isFrench
+                              ? "Conversion de devise requise"
+                              : "Currency conversion required"}
+                          </p>
+
+                          <p className="mt-1">
+                            {isFrench
+                              ? `Ce transfert nécessite une conversion ${selectedCurrency} → ${destinationCurrency}. Pour protéger les soldes, NdakoCare ne traitera pas ce transfert avant l'activation du moteur de change.`
+                              : `This transfer requires ${selectedCurrency} → ${destinationCurrency} conversion. To protect wallet balances, NdakoCare will not process it until the FX engine is enabled.`}
+                          </p>
+                        </div>
                       )}
                     </div>
                   )}
 
                   <label className="flex flex-col gap-2">
-                    <span className="font-medium text-gray-700">
-                      {language === "fr"
+                    <span className="font-semibold text-slate-700">
+                      {isFrench
                         ? "Montant à envoyer"
                         : "Amount to send"}
                     </span>
 
-                    <input
-                      type="number"
-                      min="0.01"
-                      step="0.01"
-                      inputMode="decimal"
-                      value={amount}
-                      onChange={(event) => {
-                        setAmount(event.target.value);
-                        setSuccessMessage("");
-                        setErrorMessage("");
-                      }}
-                      placeholder="0.00"
-                      className="rounded-xl border border-gray-300 p-3 outline-none transition focus:border-green-600 focus:ring-2 focus:ring-green-100"
-                    />
+                    <div className="relative">
+                      <input
+                        type="number"
+                        min="0.01"
+                        step="0.01"
+                        inputMode="decimal"
+                        value={amount}
+                        onChange={(event) => {
+                          setAmount(
+                            event.target.value
+                          );
+                          setSuccessMessage("");
+                          setErrorMessage("");
+                        }}
+                        placeholder="0.00"
+                        className="min-h-12 w-full rounded-xl border border-slate-300 p-3 pr-20 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                      />
+
+                      <span className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4 text-sm font-bold text-slate-500">
+                        {selectedCurrency}
+                      </span>
+                    </div>
                   </label>
 
                   <label className="flex flex-col gap-2">
-                    <span className="font-medium text-gray-700">
-                      {language === "fr"
+                    <span className="font-semibold text-slate-700">
+                      {isFrench
                         ? "Motif"
                         : "Purpose"}
                     </span>
@@ -1004,42 +1282,44 @@ export default function TransferPage() {
                     <select
                       value={purpose}
                       onChange={(event) =>
-                        setPurpose(event.target.value)
+                        setPurpose(
+                          event.target.value
+                        )
                       }
-                      className="rounded-xl border border-gray-300 bg-white p-3 outline-none transition focus:border-green-600 focus:ring-2 focus:ring-green-100"
+                      className="min-h-12 rounded-xl border border-slate-300 bg-white p-3 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
                     >
                       <option value="Family Support">
-                        {language === "fr"
+                        {isFrench
                           ? "Soutien familial"
                           : "Family Support"}
                       </option>
 
                       <option value="Education">
-                        {language === "fr"
+                        {isFrench
                           ? "Éducation"
                           : "Education"}
                       </option>
 
                       <option value="Medical">
-                        {language === "fr"
+                        {isFrench
                           ? "Frais médicaux"
                           : "Medical"}
                       </option>
 
                       <option value="Bills">
-                        {language === "fr"
+                        {isFrench
                           ? "Factures"
                           : "Bills"}
                       </option>
 
                       <option value="Gift">
-                        {language === "fr"
+                        {isFrench
                           ? "Cadeau"
                           : "Gift"}
                       </option>
 
                       <option value="Other">
-                        {language === "fr"
+                        {isFrench
                           ? "Autre"
                           : "Other"}
                       </option>
@@ -1047,8 +1327,8 @@ export default function TransferPage() {
                   </label>
 
                   <label className="flex flex-col gap-2 md:col-span-2">
-                    <span className="font-medium text-gray-700">
-                      {language === "fr"
+                    <span className="font-semibold text-slate-700">
+                      {isFrench
                         ? "Note facultative"
                         : "Optional note"}
                     </span>
@@ -1056,82 +1336,90 @@ export default function TransferPage() {
                     <textarea
                       value={notes}
                       onChange={(event) =>
-                        setNotes(event.target.value)
+                        setNotes(
+                          event.target.value
+                        )
                       }
                       rows={3}
                       maxLength={250}
                       placeholder={
-                        language === "fr"
+                        isFrench
                           ? "Ajoutez une courte description..."
                           : "Add a short description..."
                       }
-                      className="resize-none rounded-xl border border-gray-300 p-3 outline-none transition focus:border-green-600 focus:ring-2 focus:ring-green-100"
+                      className="resize-none rounded-xl border border-slate-300 p-3 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
                     />
 
-                    <span className="text-right text-xs text-gray-500">
+                    <span className="text-right text-xs text-slate-500">
                       {notes.length}/250
                     </span>
                   </label>
                 </div>
 
-                <div className="mt-8 rounded-2xl border border-gray-200 bg-gray-50 p-6">
-                  <h3 className="text-xl font-bold text-green-700">
-                    {language === "fr"
-                      ? "Résumé du transfert"
-                      : "Transfer summary"}
-                  </h3>
+                <div className="mt-8 rounded-3xl border border-slate-200 bg-slate-50 p-6">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <h3 className="text-xl font-bold text-slate-950">
+                      {isFrench
+                        ? "Résumé du transfert"
+                        : "Transfer summary"}
+                    </h3>
+
+                    <span className="text-sm font-semibold text-slate-500">
+                      {selectedCurrency}
+                    </span>
+                  </div>
 
                   <dl className="mt-5 space-y-3">
                     <div className="flex items-center justify-between gap-4">
-                      <dt className="text-gray-600">
-                        {language === "fr"
+                      <dt className="text-slate-600">
+                        {isFrench
                           ? "Montant"
                           : "Amount"}
                       </dt>
 
-                      <dd className="font-semibold text-gray-900">
-                        {formatMoney(
+                      <dd className="font-semibold text-slate-900">
+                        {money(
                           transferAmount,
-                          walletCurrency
+                          selectedCurrency
                         )}
                       </dd>
                     </div>
 
                     <div className="flex items-center justify-between gap-4">
-                      <dt className="text-gray-600">
-                        {language === "fr"
+                      <dt className="text-slate-600">
+                        {isFrench
                           ? "Frais de transfert"
                           : "Transfer fee"}
                       </dt>
 
-                      <dd className="font-semibold text-gray-900">
-                        {formatMoney(
+                      <dd className="font-semibold text-slate-900">
+                        {money(
                           transferFee,
-                          walletCurrency
+                          selectedCurrency
                         )}
                       </dd>
                     </div>
 
-                    <div className="border-t border-gray-300 pt-3">
+                    <div className="border-t border-slate-300 pt-3">
                       <div className="flex items-center justify-between gap-4">
-                        <dt className="font-bold text-gray-900">
-                          {language === "fr"
+                        <dt className="font-bold text-slate-900">
+                          {isFrench
                             ? "Total débité"
                             : "Total debit"}
                         </dt>
 
-                        <dd className="text-lg font-bold text-green-700">
-                          {formatMoney(
+                        <dd className="text-lg font-bold text-emerald-700">
+                          {money(
                             totalDebit,
-                            walletCurrency
+                            selectedCurrency
                           )}
                         </dd>
                       </div>
                     </div>
 
                     <div className="flex items-center justify-between gap-4">
-                      <dt className="text-gray-600">
-                        {language === "fr"
+                      <dt className="text-slate-600">
+                        {isFrench
                           ? "Solde après transfert"
                           : "Balance after transfer"}
                       </dt>
@@ -1140,12 +1428,12 @@ export default function TransferPage() {
                         className={`font-semibold ${
                           remainingBalance < 0
                             ? "text-red-600"
-                            : "text-gray-900"
+                            : "text-slate-900"
                         }`}
                       >
-                        {formatMoney(
+                        {money(
                           remainingBalance,
-                          walletCurrency
+                          selectedCurrency
                         )}
                       </dd>
                     </div>
@@ -1154,22 +1442,30 @@ export default function TransferPage() {
 
                 <button
                   type="button"
-                  onClick={sendMoney}
+                  onClick={() =>
+                    void sendMoney()
+                  }
                   disabled={
                     isSending ||
                     !selectedBeneficiary ||
                     transferAmount <= 0 ||
-                    totalDebit > balance
+                    totalDebit > balance ||
+                    requiresCurrencyConversion ||
+                    !selectedWallet
                   }
-                  className="mt-6 w-full rounded-xl bg-green-600 px-6 py-3 font-semibold text-white transition hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-green-400 sm:w-auto"
+                  className="mt-6 inline-flex min-h-12 w-full items-center justify-center rounded-xl bg-emerald-600 px-6 py-3 font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-emerald-300 sm:w-auto"
                 >
                   {isSending
-                    ? language === "fr"
+                    ? isFrench
                       ? "Envoi en cours..."
                       : "Sending..."
-                    : language === "fr"
-                      ? "Vérifier et envoyer"
-                      : "Review and send"}
+                    : requiresCurrencyConversion
+                      ? isFrench
+                        ? "Conversion requise"
+                        : "FX required"
+                      : isFrench
+                        ? "Vérifier et envoyer"
+                        : "Review and send"}
                 </button>
               </>
             )}
