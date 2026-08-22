@@ -151,7 +151,7 @@ export default function DashboardPage() {
             />
           </div>
 
-          <div className="grid lg:grid-cols-3 gap-8 mb-10">
+          <div className="grid lg:grid-cols-3 gap-8 mb-10 items-start">
             <div className="lg:col-span-2 bg-white rounded-3xl shadow-lg p-8">
               <h2 className="text-3xl font-bold mb-6">
                 {isFr ? "Écosystème NdakoCare" : "NdakoCare Ecosystem"}
