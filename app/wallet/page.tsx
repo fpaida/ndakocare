@@ -192,134 +192,115 @@ export default function WalletPage() {
   }, [fetchWalletData]);
 
   const handleDeposit = async () => {
-    setMessage(null);
+  setMessage(null);
 
-    const depositAmount = Number(amount);
+  const depositAmount = Number(amount);
 
-    if (!Number.isFinite(depositAmount) || depositAmount <= 0) {
-      setMessage({
-        type: "error",
-        text: isFrench
-          ? "Veuillez entrer un montant valide supérieur à zéro."
-          : "Please enter a valid amount greater than zero.",
-      });
-      return;
+  if (
+    !Number.isFinite(depositAmount) ||
+    depositAmount <= 0
+  ) {
+    setMessage({
+      type: "error",
+      text: isFrench
+        ? "Veuillez entrer un montant valide supérieur à zéro."
+        : "Please enter a valid amount greater than zero.",
+    });
+    return;
+  }
+
+  if (!activeCurrency) {
+    setMessage({
+      type: "error",
+      text: isFrench
+        ? "Veuillez sélectionner un compte en devise."
+        : "Please select a currency account.",
+    });
+    return;
+  }
+
+  setIsDepositing(true);
+
+  try {
+    const {
+      data: { session },
+      error: sessionError,
+    } = await supabase.auth.getSession();
+
+    if (sessionError) {
+      throw sessionError;
     }
 
-    if (!activeCurrency) {
-      setMessage({
-        type: "error",
-        text: isFrench
-          ? "Veuillez sélectionner un compte en devise."
-          : "Please select a currency account.",
-      });
-      return;
+    if (!session) {
+      throw new Error(
+        isFrench
+          ? "Votre session a expiré. Veuillez vous reconnecter."
+          : "Your session has expired. Please sign in again."
+      );
     }
 
-    setIsDepositing(true);
-
-    try {
-      const {
-        data: { session },
-        error: sessionError,
-      } = await supabase.auth.getSession();
-
-      if (sessionError) {
-        throw sessionError;
+    const { data, error } = await supabase.rpc(
+      "ndakocare_create_deposit",
+      {
+        p_currency: activeCurrency,
+        p_amount: depositAmount,
       }
+    );
 
-      if (!session) {
-        throw new Error(
-          isFrench
-            ? "Votre session a expiré. Veuillez vous reconnecter."
-            : "Your session has expired. Please sign in again."
-        );
-      }
-
-      const { data: latestWallet, error: walletReadError } =
-        await supabase
-          .from("wallet_balances")
-          .select("balance")
-          .eq("user_id", session.user.id)
-          .eq("currency", activeCurrency)
-          .single();
-
-      if (walletReadError) {
-        throw walletReadError;
-      }
-
-      const latestBalance = Number(latestWallet.balance ?? 0);
-      const newBalance = latestBalance + depositAmount;
-
-      const { error: walletUpdateError } = await supabase
-        .from("wallet_balances")
-        .update({ balance: newBalance })
-        .eq("user_id", session.user.id)
-        .eq("currency", activeCurrency);
-
-      if (walletUpdateError) {
-        throw walletUpdateError;
-      }
-
-      const { error: transactionError } = await supabase
-        .from("wallet_transactions")
-        .insert([
-          {
-            user_id: session.user.id,
-            transaction_type: "Deposit",
-            amount: depositAmount,
-            currency: activeCurrency,
-            description: `Wallet Deposit - ${activeCurrency}`,
-          },
-        ]);
-
-      if (transactionError) {
-        // Temporary client-side rollback. A later production phase will move
-        // balance mutation + transaction creation into one atomic server action.
-        const { error: rollbackError } = await supabase
-          .from("wallet_balances")
-          .update({ balance: latestBalance })
-          .eq("user_id", session.user.id)
-          .eq("currency", activeCurrency);
-
-        if (rollbackError) {
-          console.error(
-            "Wallet rollback failed:",
-            rollbackError.message
-          );
-        }
-
-        throw transactionError;
-      }
-
-      setAmount("");
-      setShowDeposit(false);
-
-      await fetchWalletData();
-
-      setMessage({
-        type: "success",
-        text: isFrench
-          ? `Dépôt ${activeCurrency} effectué avec succès.`
-          : `${activeCurrency} deposit completed successfully.`,
-      });
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error
-          ? error.message
-          : isFrench
-            ? "Le dépôt n'a pas pu être effectué."
-            : "The deposit could not be completed.";
-
-      setMessage({
-        type: "error",
-        text: errorMessage,
-      });
-    } finally {
-      setIsDepositing(false);
+    if (error) {
+      throw error;
     }
-  };
 
+    const result = data as {
+      success?: boolean;
+      reference?: string;
+      currency?: string;
+      amount?: number;
+      balance_before?: number;
+      balance_after?: number;
+      status?: string;
+      transaction_id?: string;
+    } | null;
+
+    if (!result?.success) {
+      throw new Error(
+        isFrench
+          ? "Le dépôt n'a pas pu être effectué."
+          : "The deposit could not be completed."
+      );
+    }
+
+    setAmount("");
+    setShowDeposit(false);
+
+    await fetchWalletData();
+
+    setMessage({
+      type: "success",
+      text: isFrench
+        ? `Dépôt ${activeCurrency} effectué avec succès. Référence : ${
+            result.reference ?? "—"
+          }`
+        : `${activeCurrency} deposit completed successfully. Reference: ${
+            result.reference ?? "—"
+          }`,
+    });
+  } catch (error) {
+    const errorMessage =
+      error instanceof Error
+        ? error.message
+        : isFrench
+          ? "Le dépôt n'a pas pu être effectué."
+          : "The deposit could not be completed.";
+
+    setMessage({
+      type: "error",
+      text: errorMessage,
+    });
+  } finally {
+    setIsDepositing(false);
+  }
+};
   const handleWithdraw = () => {
     setMessage({
       type: "error",
