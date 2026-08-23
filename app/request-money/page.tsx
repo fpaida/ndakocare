@@ -3,8 +3,24 @@
 import { useState } from "react";
 import Navbar from "../components/Navbar";
 import { supabase } from "../lib/supabase";
+import {
+  SUPPORTED_CURRENCIES,
+  formatCurrency,
+} from "../lib/currency";
+import { useLanguage } from "../context/LanguageContext";
+
+const REQUEST_TYPES = [
+  "School Fees",
+  "Medical Emergency",
+  "Food Assistance",
+  "Rent Assistance",
+  "Transportation",
+  "Other",
+];
 
 export default function RequestMoneyPage() {
+  const { language } = useLanguage();
+
   const [requesterName, setRequesterName] = useState("");
   const [requesterPhone, setRequesterPhone] = useState("");
   const [country, setCountry] = useState("");
@@ -14,168 +30,360 @@ export default function RequestMoneyPage() {
   const [message, setMessage] = useState("");
 
   const [loading, setLoading] = useState(false);
-  const [success, setSuccess] = useState(false);
+  const [successReference, setSuccessReference] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
 
-  const submitRequest = async () => {
+  const numericAmount = Number(amount);
+
+  const validAmount =
+    Number.isFinite(numericAmount) && numericAmount > 0;
+
+  function generateReference() {
+    const randomPart = crypto.randomUUID()
+      .replaceAll("-", "")
+      .slice(0, 16)
+      .toUpperCase();
+
+    return `NDR-${randomPart}`;
+  }
+
+  async function submitRequest() {
+    setErrorMessage("");
+    setSuccessReference("");
+
+    if (!requesterName.trim()) {
+      setErrorMessage(
+        language === "fr"
+          ? "Le nom du demandeur est requis."
+          : "Requester name is required."
+      );
+      return;
+    }
+
+    if (!requesterPhone.trim()) {
+      setErrorMessage(
+        language === "fr"
+          ? "Le numéro de téléphone est requis."
+          : "Requester phone is required."
+      );
+      return;
+    }
+
+    if (!country.trim()) {
+      setErrorMessage(
+        language === "fr"
+          ? "Le pays est requis."
+          : "Country is required."
+      );
+      return;
+    }
+
+    if (!validAmount) {
+      setErrorMessage(
+        language === "fr"
+          ? "Le montant doit être supérieur à zéro."
+          : "Amount must be greater than zero."
+      );
+      return;
+    }
+
     setLoading(true);
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    try {
+      const {
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
 
-    if (!user) {
-      alert("Please login.");
-      setLoading(false);
-      return;
-    }
+      if (authError || !user) {
+        throw new Error(
+          language === "fr"
+            ? "Veuillez vous connecter."
+            : "Please log in."
+        );
+      }
 
-    const { error } = await supabase
-      .from("money_requests")
-      .insert([
-        {
+      const reference = generateReference();
+
+      const { error } = await supabase
+        .from("money_requests")
+        .insert({
           user_id: user.id,
-          requester_name: requesterName,
-          requester_phone: requesterPhone,
-          country,
+          requester_name: requesterName.trim(),
+          requester_phone: requesterPhone.trim(),
+          country: country.trim(),
           request_type: requestType,
-          amount: Number(amount),
+          amount: numericAmount,
           currency,
-          message,
-        },
-      ]);
+          message: message.trim() || null,
+          status: "Pending",
+          reference,
+        });
 
-    setLoading(false);
+      if (error) {
+        throw error;
+      }
 
-    if (error) {
-      alert(error.message);
-      return;
+      setSuccessReference(reference);
+
+      setRequesterName("");
+      setRequesterPhone("");
+      setCountry("");
+      setRequestType("School Fees");
+      setAmount("");
+      setCurrency("XAF");
+      setMessage("");
+    } catch (error: unknown) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : language === "fr"
+          ? "Impossible d'envoyer la demande."
+          : "Unable to submit the request."
+      );
+    } finally {
+      setLoading(false);
     }
-
-    setSuccess(true);
-
-    setRequesterName("");
-    setRequesterPhone("");
-    setCountry("");
-    setAmount("");
-    setMessage("");
-  };
+  }
 
   return (
     <>
       <Navbar />
 
-      <div className="min-h-screen bg-gray-50 p-8">
-        <div className="max-w-3xl mx-auto bg-white rounded-3xl shadow-xl p-10">
+      <main className="min-h-screen bg-gray-50 px-4 py-10 sm:px-6">
+        <div className="mx-auto max-w-5xl">
+          <div className="mb-8">
+            <p className="mb-2 text-sm font-semibold tracking-wider text-green-700">
+              NDAKOCARE · REQUESTS
+            </p>
 
-          <h1 className="text-4xl font-bold text-green-700 mb-4">
-            Request Money
-          </h1>
+            <h1 className="text-4xl font-bold text-gray-950">
+              {language === "fr"
+                ? "Demander de l'argent"
+                : "Request Money"}
+            </h1>
 
-          <p className="text-gray-600 mb-8">
-            Submit a financial assistance request.
-          </p>
+            <p className="mt-3 text-gray-600">
+              {language === "fr"
+                ? "Créez une demande d'aide financière et suivez son statut."
+                : "Create a financial assistance request and track its status."}
+            </p>
+          </div>
 
-          <div className="space-y-5">
+          {successReference && (
+            <div className="mb-6 rounded-2xl border border-green-300 bg-green-50 p-5 text-green-800">
+              <p className="font-semibold">
+                {language === "fr"
+                  ? "Demande envoyée avec succès."
+                  : "Request submitted successfully."}
+              </p>
 
-            <input
-              type="text"
-              placeholder="Requester Name"
-              value={requesterName}
-              onChange={(e) =>
-                setRequesterName(e.target.value)
-              }
-              className="w-full p-4 border rounded-xl"
-            />
+              <p className="mt-1 text-sm">
+                {language === "fr" ? "Référence" : "Reference"}:{" "}
+                <span className="font-bold">
+                  {successReference}
+                </span>
+              </p>
+            </div>
+          )}
 
-            <input
-              type="text"
-              placeholder="Requester Phone"
-              value={requesterPhone}
-              onChange={(e) =>
-                setRequesterPhone(e.target.value)
-              }
-              className="w-full p-4 border rounded-xl"
-            />
+          {errorMessage && (
+            <div className="mb-6 rounded-2xl border border-red-300 bg-red-50 p-5 text-red-700">
+              {errorMessage}
+            </div>
+          )}
 
-            <input
-              type="text"
-              placeholder="Country"
-              value={country}
-              onChange={(e) =>
-                setCountry(e.target.value)
-              }
-              className="w-full p-4 border rounded-xl"
-            />
+          <section className="rounded-3xl bg-white p-6 shadow-lg sm:p-10">
+            <div className="grid gap-6 md:grid-cols-2">
+              <div>
+                <label className="mb-2 block font-semibold text-gray-800">
+                  {language === "fr"
+                    ? "Nom du demandeur"
+                    : "Requester name"}
+                </label>
 
-            <select
-              value={requestType}
-              onChange={(e) =>
-                setRequestType(e.target.value)
-              }
-              className="w-full p-4 border rounded-xl"
-            >
-              <option>School Fees</option>
-              <option>Medical Emergency</option>
-              <option>Food Assistance</option>
-              <option>Rent Assistance</option>
-              <option>Transportation</option>
-              <option>Other</option>
-            </select>
+                <input
+                  type="text"
+                  value={requesterName}
+                  onChange={(e) =>
+                    setRequesterName(e.target.value)
+                  }
+                  placeholder={
+                    language === "fr"
+                      ? "Nom complet"
+                      : "Full name"
+                  }
+                  className="w-full rounded-xl border border-gray-300 p-4 outline-none focus:border-green-600"
+                />
+              </div>
 
-            <div className="flex gap-3">
-              <input
-                type="number"
-                placeholder="Amount"
-                value={amount}
-                onChange={(e) =>
-                  setAmount(e.target.value)
-                }
-                className="flex-1 p-4 border rounded-xl"
-              />
+              <div>
+                <label className="mb-2 block font-semibold text-gray-800">
+                  {language === "fr"
+                    ? "Téléphone"
+                    : "Phone"}
+                </label>
 
-              <select
-                value={currency}
-                onChange={(e) =>
-                  setCurrency(e.target.value)
-                }
-                className="p-4 border rounded-xl"
-              >
-                <option>XAF</option>
-                <option>USD</option>
-                <option>EUR</option>
-                <option>CDF</option>
-              </select>
+                <input
+                  type="tel"
+                  value={requesterPhone}
+                  onChange={(e) =>
+                    setRequesterPhone(e.target.value)
+                  }
+                  placeholder="+236..."
+                  className="w-full rounded-xl border border-gray-300 p-4 outline-none focus:border-green-600"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block font-semibold text-gray-800">
+                  {language === "fr" ? "Pays" : "Country"}
+                </label>
+
+                <input
+                  type="text"
+                  value={country}
+                  onChange={(e) => setCountry(e.target.value)}
+                  placeholder={
+                    language === "fr"
+                      ? "Pays du demandeur"
+                      : "Requester country"
+                  }
+                  className="w-full rounded-xl border border-gray-300 p-4 outline-none focus:border-green-600"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block font-semibold text-gray-800">
+                  {language === "fr"
+                    ? "Type de demande"
+                    : "Request type"}
+                </label>
+
+                <select
+                  value={requestType}
+                  onChange={(e) =>
+                    setRequestType(e.target.value)
+                  }
+                  className="w-full rounded-xl border border-gray-300 bg-white p-4"
+                >
+                  {REQUEST_TYPES.map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="mb-2 block font-semibold text-gray-800">
+                  {language === "fr" ? "Montant" : "Amount"}
+                </label>
+
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  placeholder="0"
+                  className="w-full rounded-xl border border-gray-300 p-4 outline-none focus:border-green-600"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block font-semibold text-gray-800">
+                  {language === "fr" ? "Devise" : "Currency"}
+                </label>
+
+                <select
+                  value={currency}
+                  onChange={(e) => setCurrency(e.target.value)}
+                  className="w-full rounded-xl border border-gray-300 bg-white p-4"
+                >
+                  {SUPPORTED_CURRENCIES.map((item) => (
+                    <option key={item.code} value={item.code}>
+                      {item.code} — {item.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
-            <textarea
-              rows={4}
-              placeholder="Describe the request"
-              value={message}
-              onChange={(e) =>
-                setMessage(e.target.value)
-              }
-              className="w-full p-4 border rounded-xl"
-            />
+            <div className="mt-6">
+              <label className="mb-2 block font-semibold text-gray-800">
+                {language === "fr"
+                  ? "Message"
+                  : "Message"}
+              </label>
 
-            {success && (
-              <div className="bg-green-100 text-green-700 p-4 rounded-xl">
-                Request submitted successfully!
+              <textarea
+                rows={5}
+                maxLength={500}
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                placeholder={
+                  language === "fr"
+                    ? "Décrivez brièvement la demande..."
+                    : "Briefly describe the request..."
+                }
+                className="w-full rounded-xl border border-gray-300 p-4 outline-none focus:border-green-600"
+              />
+
+              <p className="mt-1 text-right text-xs text-gray-500">
+                {message.length}/500
+              </p>
+            </div>
+
+            {validAmount && (
+              <div className="mt-8 rounded-2xl border border-gray-200 bg-gray-50 p-6">
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-600">
+                    {language === "fr"
+                      ? "Montant demandé"
+                      : "Requested amount"}
+                  </span>
+
+                  <span className="text-xl font-bold text-green-700">
+                  {formatCurrency(
+                   numericAmount,
+                   currency,
+                   language === "fr" ? "fr" : "en"
+      )} 
+                  </span>
+                </div>
+
+                <div className="mt-3 flex items-center justify-between">
+                  <span className="text-gray-600">
+                    {language === "fr" ? "Statut" : "Status"}
+                  </span>
+
+                  <span className="rounded-full bg-yellow-100 px-3 py-1 text-sm font-semibold text-yellow-800">
+                    {language === "fr"
+                      ? "En attente"
+                      : "Pending"}
+                  </span>
+                </div>
               </div>
             )}
 
             <button
+              type="button"
               onClick={submitRequest}
               disabled={loading}
-              className="w-full bg-green-700 text-white p-4 rounded-xl font-bold"
+              className="mt-8 w-full rounded-xl bg-green-700 p-4 font-bold text-white transition hover:bg-green-800 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {loading
-                ? "Submitting..."
+                ? language === "fr"
+                  ? "Envoi..."
+                  : "Submitting..."
+                : language === "fr"
+                ? "Envoyer la demande"
                 : "Submit Request"}
             </button>
-
-          </div>
+          </section>
         </div>
-      </div>
+      </main>
     </>
   );
 }
