@@ -55,11 +55,13 @@ export default function WalletPage() {
   const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
   const [amount, setAmount] = useState("");
   const [showDeposit, setShowDeposit] = useState(false);
+  const [showWithdraw, setShowWithdraw] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [activeFilter, setActiveFilter] =
     useState<TransactionFilter>("All");
   const [isLoading, setIsLoading] = useState(true);
   const [isDepositing, setIsDepositing] = useState(false);
+  const [isWithdrawing, setIsWithdrawing] = useState(false);
   const [message, setMessage] = useState<MessageState>(null);
 
   const activeCurrency = selectedCurrency || preferredCurrency;
@@ -192,122 +194,211 @@ export default function WalletPage() {
   }, [fetchWalletData]);
 
   const handleDeposit = async () => {
-  setMessage(null);
+    setMessage(null);
 
-  const depositAmount = Number(amount);
+    const depositAmount = Number(amount);
 
-  if (
-    !Number.isFinite(depositAmount) ||
-    depositAmount <= 0
-  ) {
-    setMessage({
-      type: "error",
-      text: isFrench
-        ? "Veuillez entrer un montant valide supérieur à zéro."
-        : "Please enter a valid amount greater than zero.",
-    });
-    return;
-  }
-
-  if (!activeCurrency) {
-    setMessage({
-      type: "error",
-      text: isFrench
-        ? "Veuillez sélectionner un compte en devise."
-        : "Please select a currency account.",
-    });
-    return;
-  }
-
-  setIsDepositing(true);
-
-  try {
-    const {
-      data: { session },
-      error: sessionError,
-    } = await supabase.auth.getSession();
-
-    if (sessionError) {
-      throw sessionError;
+    if (!Number.isFinite(depositAmount) || depositAmount <= 0) {
+      setMessage({
+        type: "error",
+        text: isFrench
+          ? "Veuillez entrer un montant valide supérieur à zéro."
+          : "Please enter a valid amount greater than zero.",
+      });
+      return;
     }
 
-    if (!session) {
-      throw new Error(
-        isFrench
-          ? "Votre session a expiré. Veuillez vous reconnecter."
-          : "Your session has expired. Please sign in again."
-      );
+    if (!activeCurrency) {
+      setMessage({
+        type: "error",
+        text: isFrench
+          ? "Veuillez sélectionner un compte en devise."
+          : "Please select a currency account.",
+      });
+      return;
     }
 
-    const { data, error } = await supabase.rpc(
-      "ndakocare_create_deposit",
-      {
+    setIsDepositing(true);
+
+    try {
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
+
+      if (sessionError) throw sessionError;
+
+      if (!session) {
+        throw new Error(
+          isFrench
+            ? "Votre session a expiré. Veuillez vous reconnecter."
+            : "Your session has expired. Please sign in again."
+        );
+      }
+
+      const { data, error } = await supabase.rpc("ndakocare_create_deposit", {
         p_currency: activeCurrency,
         p_amount: depositAmount,
+      });
+
+      if (error) throw error;
+
+      const result = data as {
+        success?: boolean;
+        reference?: string;
+        currency?: string;
+        amount?: number;
+        balance_before?: number;
+        balance_after?: number;
+        status?: string;
+        transaction_id?: string;
+      } | null;
+
+      if (!result?.success) {
+        throw new Error(
+          isFrench
+            ? "Le dépôt n'a pas pu être effectué."
+            : "The deposit could not be completed."
+        );
       }
-    );
 
-    if (error) {
-      throw error;
+      setAmount("");
+      setShowDeposit(false);
+      await fetchWalletData();
+
+      setMessage({
+        type: "success",
+        text: isFrench
+          ? `Dépôt ${activeCurrency} effectué avec succès. Référence : ${
+              result.reference ?? "—"
+            }`
+          : `${activeCurrency} deposit completed successfully. Reference: ${
+              result.reference ?? "—"
+            }`,
+      });
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : isFrench
+            ? "Le dépôt n'a pas pu être effectué."
+            : "The deposit could not be completed.";
+
+      setMessage({ type: "error", text: errorMessage });
+    } finally {
+      setIsDepositing(false);
+    }
+  };
+
+  const handleWithdraw = async () => {
+    setMessage(null);
+
+    const withdrawalAmount = Number(amount);
+    const currentBalance = Number(activeWallet?.balance ?? 0);
+
+    if (!Number.isFinite(withdrawalAmount) || withdrawalAmount <= 0) {
+      setMessage({
+        type: "error",
+        text: isFrench
+          ? "Veuillez entrer un montant valide supérieur à zéro."
+          : "Please enter a valid amount greater than zero.",
+      });
+      return;
     }
 
-    const result = data as {
-      success?: boolean;
-      reference?: string;
-      currency?: string;
-      amount?: number;
-      balance_before?: number;
-      balance_after?: number;
-      status?: string;
-      transaction_id?: string;
-    } | null;
+    if (!activeCurrency) {
+      setMessage({
+        type: "error",
+        text: isFrench
+          ? "Veuillez sélectionner un compte en devise."
+          : "Please select a currency account.",
+      });
+      return;
+    }
 
-    if (!result?.success) {
-      throw new Error(
-        isFrench
-          ? "Le dépôt n'a pas pu être effectué."
-          : "The deposit could not be completed."
+    if (withdrawalAmount > currentBalance) {
+      setMessage({
+        type: "error",
+        text: isFrench
+          ? "Solde insuffisant pour effectuer ce retrait."
+          : "Insufficient balance for this withdrawal.",
+      });
+      return;
+    }
+
+    setIsWithdrawing(true);
+
+    try {
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
+
+      if (sessionError) throw sessionError;
+
+      if (!session) {
+        throw new Error(
+          isFrench
+            ? "Votre session a expiré. Veuillez vous reconnecter."
+            : "Your session has expired. Please sign in again."
+        );
+      }
+
+      const { data, error } = await supabase.rpc(
+        "ndakocare_create_withdrawal",
+        {
+          p_currency: activeCurrency,
+          p_amount: withdrawalAmount,
+        }
       );
+
+      if (error) throw error;
+
+      const result = data as {
+        success?: boolean;
+        reference?: string;
+        currency?: string;
+        amount?: number;
+        balance_before?: number;
+        balance_after?: number;
+        status?: string;
+        transaction_id?: string;
+      } | null;
+
+      if (!result?.success) {
+        throw new Error(
+          isFrench
+            ? "Le retrait n'a pas pu être effectué."
+            : "The withdrawal could not be completed."
+        );
+      }
+
+      setAmount("");
+      setShowWithdraw(false);
+      await fetchWalletData();
+
+      setMessage({
+        type: "success",
+        text: isFrench
+          ? `Retrait ${activeCurrency} effectué avec succès. Référence : ${
+              result.reference ?? "—"
+            }`
+          : `${activeCurrency} withdrawal completed successfully. Reference: ${
+              result.reference ?? "—"
+            }`,
+      });
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : isFrench
+            ? "Le retrait n'a pas pu être effectué."
+            : "The withdrawal could not be completed.";
+
+      setMessage({ type: "error", text: errorMessage });
+    } finally {
+      setIsWithdrawing(false);
     }
-
-    setAmount("");
-    setShowDeposit(false);
-
-    await fetchWalletData();
-
-    setMessage({
-      type: "success",
-      text: isFrench
-        ? `Dépôt ${activeCurrency} effectué avec succès. Référence : ${
-            result.reference ?? "—"
-          }`
-        : `${activeCurrency} deposit completed successfully. Reference: ${
-            result.reference ?? "—"
-          }`,
-    });
-  } catch (error) {
-    const errorMessage =
-      error instanceof Error
-        ? error.message
-        : isFrench
-          ? "Le dépôt n'a pas pu être effectué."
-          : "The deposit could not be completed.";
-
-    setMessage({
-      type: "error",
-      text: errorMessage,
-    });
-  } finally {
-    setIsDepositing(false);
-  }
-};
-  const handleWithdraw = () => {
-    setMessage({
-      type: "error",
-      text: isFrench
-        ? "La fonction de retrait sera bientôt disponible."
-        : "The withdrawal feature is coming soon.",
-    });
   };
 
   const selectedCurrencyTransactions = useMemo(() => {
@@ -551,6 +642,8 @@ export default function WalletPage() {
                   type="button"
                   onClick={() => {
                     setShowDeposit(true);
+                    setShowWithdraw(false);
+                    setAmount("");
                     setMessage(null);
                   }}
                   className="rounded-2xl bg-white px-5 py-4 text-left text-emerald-800 shadow-lg transition hover:-translate-y-0.5 hover:bg-emerald-50"
@@ -579,7 +672,12 @@ export default function WalletPage() {
 
                 <button
                   type="button"
-                  onClick={handleWithdraw}
+                  onClick={() => {
+                    setShowWithdraw(true);
+                    setShowDeposit(false);
+                    setAmount("");
+                    setMessage(null);
+                  }}
                   className="rounded-2xl bg-white/10 px-5 py-4 text-left text-white ring-1 ring-white/25 transition hover:-translate-y-0.5 hover:bg-white/20"
                 >
                   <span className="mb-3 block text-2xl">↑</span>
@@ -587,7 +685,7 @@ export default function WalletPage() {
                     {text.walletWithdraw}
                   </span>
                   <span className="mt-1 block text-xs text-emerald-50">
-                    {isFrench ? "Bientôt disponible" : "Coming soon"}
+                    {isFrench ? "Retirer des fonds" : "Withdraw funds"}
                   </span>
                 </button>
               </div>
@@ -633,6 +731,7 @@ export default function WalletPage() {
                       onClick={() => {
                         setSelectedCurrency(wallet.currency);
                         setShowDeposit(false);
+                        setShowWithdraw(false);
                         setAmount("");
                       }}
                       className={`rounded-3xl border p-6 text-left shadow-sm transition ${
@@ -763,6 +862,115 @@ export default function WalletPage() {
                       setAmount("");
                     }}
                     disabled={isDepositing}
+                    className="min-h-14 rounded-2xl border border-slate-300 bg-white px-7 py-3 font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {isFrench ? "Annuler" : "Cancel"}
+                  </button>
+                </div>
+              </div>
+            </section>
+          )}
+
+          {showWithdraw && (
+            <section className="mb-8 rounded-3xl border border-orange-100 bg-white p-6 shadow-sm sm:p-8">
+              <div className="mb-6 flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-xl font-bold text-slate-950">
+                    {isFrench ? "Retirer de l'argent" : "Withdraw Money"}
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-600">
+                    {isFrench
+                      ? `Retirez des fonds de votre compte ${activeCurrency}.`
+                      : `Withdraw funds from your ${activeCurrency} account.`}
+                  </p>
+                  <p className="mt-2 text-sm font-medium text-slate-700">
+                    {isFrench ? "Solde disponible" : "Available balance"}: {" "}
+                    <strong>
+                      {displayMoney(
+                        Number(activeWallet?.balance ?? 0),
+                        activeCurrency
+                      )}
+                    </strong>
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowWithdraw(false);
+                    setAmount("");
+                  }}
+                  className="rounded-full bg-slate-100 px-3 py-1.5 text-xl leading-none text-slate-600 transition hover:bg-slate-200"
+                  aria-label={
+                    isFrench ? "Fermer le formulaire" : "Close withdrawal form"
+                  }
+                >
+                  ×
+                </button>
+              </div>
+
+              <div className="grid gap-6 lg:grid-cols-[1fr_auto] lg:items-end">
+                <div>
+                  <label
+                    htmlFor="withdrawal-amount"
+                    className="mb-2 block text-sm font-semibold text-slate-700"
+                  >
+                    {isFrench ? "Montant du retrait" : "Withdrawal amount"}
+                  </label>
+
+                  <p className="mb-3 text-sm text-slate-500">
+                    {isFrench ? "Compte sélectionné" : "Selected account"}: {" "}
+                    <strong>{activeCurrency}</strong>
+                  </p>
+
+                  <div className="relative">
+                    <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-4 text-sm font-semibold text-slate-500">
+                      {getCurrencySymbol(activeCurrency)}
+                    </span>
+
+                    <input
+                      id="withdrawal-amount"
+                      type="number"
+                      min="0.01"
+                      max={Number(activeWallet?.balance ?? 0)}
+                      step="0.01"
+                      inputMode="decimal"
+                      value={amount}
+                      onChange={(event) => setAmount(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          void handleWithdraw();
+                        }
+                      }}
+                      placeholder="0.00"
+                      className="min-h-14 w-full rounded-2xl border border-slate-300 bg-white py-3 pl-16 pr-4 text-lg font-semibold text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-orange-500 focus:ring-4 focus:ring-orange-100"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-3 sm:flex-row">
+                  <button
+                    type="button"
+                    onClick={() => void handleWithdraw()}
+                    disabled={
+                      isWithdrawing || Number(activeWallet?.balance ?? 0) <= 0
+                    }
+                    className="min-h-14 rounded-2xl bg-orange-600 px-7 py-3 font-semibold text-white shadow-sm transition hover:bg-orange-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {isWithdrawing
+                      ? isFrench
+                        ? "Traitement..."
+                        : "Processing..."
+                      : text.walletWithdraw}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowWithdraw(false);
+                      setAmount("");
+                    }}
+                    disabled={isWithdrawing}
                     className="min-h-14 rounded-2xl border border-slate-300 bg-white px-7 py-3 font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {isFrench ? "Annuler" : "Cancel"}
