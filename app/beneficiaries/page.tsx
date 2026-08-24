@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+
 import Navbar from "../components/Navbar";
 import { supabase } from "../lib/supabase";
 import { useLanguage } from "../context/LanguageContext";
@@ -8,49 +14,84 @@ import { useLanguage } from "../context/LanguageContext";
 import * as AfricaLibrary from "../lib/africa";
 import * as ProvidersLibrary from "../lib/providers";
 
+/* ============================================================
+   TYPES
+============================================================ */
+
 type Beneficiary = {
   id: string;
   user_id?: string;
+
   name: string;
   phone: string;
+
+  // Human-readable country name stored in database
   country: string;
+
+  // ISO country code, for example CF, CM, SN, NG
+  country_code?: string;
+
   relationship: string;
   provider: string;
+
   created_at?: string;
 };
 
 type CountryRecord = {
   code: string;
+
   name?: string;
   nameEn?: string;
   nameFr?: string;
+
   currency?: string;
   currencyCode?: string;
   currencies?: string[];
+
   [key: string]: unknown;
 };
 
 type ProviderRecord = {
   id: string;
+
   name?: string;
   nameEn?: string;
   nameFr?: string;
   displayName?: string;
+
   type?: string;
+
   country?: string;
   countryCode?: string;
+
   countries?: string[];
   supportedCountries?: string[];
+
   currency?: string;
   currencies?: string[];
+
   status?: string;
   enabled?: boolean;
+
   [key: string]: unknown;
 };
 
-const africaModule = AfricaLibrary as unknown as Record<string, unknown>;
+/* ============================================================
+   LIBRARY ADAPTERS
+
+   These adapters allow this page to continue working even if
+   africa.ts/providers.ts expose slightly different registry names.
+============================================================ */
+
+const africaModule =
+  AfricaLibrary as unknown as Record<string, unknown>;
+
 const providersModule =
   ProvidersLibrary as unknown as Record<string, unknown>;
+
+/* ============================================================
+   COUNTRY HELPERS
+============================================================ */
 
 function readCountries(): CountryRecord[] {
   const possibleCountryLists = [
@@ -60,7 +101,8 @@ function readCountries(): CountryRecord[] {
     africaModule.countries,
   ];
 
-  const countryList = possibleCountryLists.find(Array.isArray);
+  const countryList =
+    possibleCountryLists.find(Array.isArray);
 
   if (!Array.isArray(countryList)) {
     return [];
@@ -75,34 +117,12 @@ function readCountries(): CountryRecord[] {
     );
 }
 
-function readAllProviders(): ProviderRecord[] {
-  const possibleProviderLists = [
-    providersModule.PAYMENT_PROVIDERS,
-    providersModule.PROVIDERS,
-    providersModule.providers,
-    providersModule.paymentProviders,
-  ];
-
-  const providerList = possibleProviderLists.find(Array.isArray);
-
-  if (!Array.isArray(providerList)) {
-    return [];
-  }
-
-  return providerList
-    .map((provider) => provider as ProviderRecord)
-    .filter(
-      (provider) =>
-        typeof provider.id === "string" &&
-        provider.id.trim().length > 0
-    );
-}
-
 function getLocalizedCountryName(
   country: CountryRecord,
   language: string
 ): string {
-  const getCountryName = africaModule.getCountryName;
+  const getCountryName =
+    africaModule.getCountryName;
 
   if (typeof getCountryName === "function") {
     try {
@@ -120,7 +140,7 @@ function getLocalizedCountryName(
         return localizedName;
       }
     } catch {
-      // Use the fallback fields below.
+      // Continue with fallback fields.
     }
   }
 
@@ -141,11 +161,74 @@ function getLocalizedCountryName(
   );
 }
 
+function getCountryCurrency(
+  country?: CountryRecord
+): string {
+  if (!country) {
+    return "";
+  }
+
+  if (
+    typeof country.currency === "string" &&
+    country.currency.trim()
+  ) {
+    return country.currency;
+  }
+
+  if (
+    typeof country.currencyCode === "string" &&
+    country.currencyCode.trim()
+  ) {
+    return country.currencyCode;
+  }
+
+  if (
+    Array.isArray(country.currencies) &&
+    country.currencies.length > 0
+  ) {
+    return country.currencies[0];
+  }
+
+  return "";
+}
+
+/* ============================================================
+   PROVIDER HELPERS
+============================================================ */
+
+function readAllProviders(): ProviderRecord[] {
+  const possibleProviderLists = [
+    providersModule.PAYMENT_PROVIDERS,
+    providersModule.PROVIDERS,
+    providersModule.providers,
+    providersModule.paymentProviders,
+  ];
+
+  const providerList =
+    possibleProviderLists.find(Array.isArray);
+
+  if (!Array.isArray(providerList)) {
+    return [];
+  }
+
+  return providerList
+    .map(
+      (provider) =>
+        provider as ProviderRecord
+    )
+    .filter(
+      (provider) =>
+        typeof provider.id === "string" &&
+        provider.id.trim().length > 0
+    );
+}
+
 function getLocalizedProviderName(
   provider: ProviderRecord,
   language: string
 ): string {
-  const getProviderName = providersModule.getProviderName;
+  const getProviderName =
+    providersModule.getProviderName;
 
   if (typeof getProviderName === "function") {
     try {
@@ -163,7 +246,7 @@ function getLocalizedProviderName(
         return localizedName;
       }
     } catch {
-      // Use the fallback fields below.
+      // Continue with fallback fields.
     }
   }
 
@@ -200,254 +283,375 @@ function getProvidersForCountry(
   ];
 
   for (const helperName of helperNames) {
-    const helper = providersModule[helperName];
+    const helper =
+      providersModule[helperName];
 
     if (typeof helper === "function") {
       try {
         const result = (
-          helper as (countryCode: string) => unknown
+          helper as (
+            countryCode: string
+          ) => unknown
         )(countryCode);
 
         if (Array.isArray(result)) {
           return result as ProviderRecord[];
         }
       } catch {
-        // Continue to the registry-based fallback.
+        // Continue to registry fallback.
       }
     }
   }
 
-  const normalizedCountryCode = countryCode.toUpperCase();
+  const normalizedCountryCode =
+    countryCode.toUpperCase();
 
-  return readAllProviders().filter((provider) => {
-    const singleCountry =
-      provider.countryCode || provider.country;
+  return readAllProviders().filter(
+    (provider) => {
+      const singleCountry =
+        provider.countryCode ||
+        provider.country;
 
-    const countryLists = [
-      provider.countries,
-      provider.supportedCountries,
-    ].filter(Array.isArray) as string[][];
+      const countryLists = [
+        provider.countries,
+        provider.supportedCountries,
+      ].filter(
+        Array.isArray
+      ) as string[][];
 
-    const matchesSingleCountry =
-      typeof singleCountry === "string" &&
-      singleCountry.toUpperCase() === normalizedCountryCode;
+      const matchesSingleCountry =
+        typeof singleCountry === "string" &&
+        singleCountry.toUpperCase() ===
+          normalizedCountryCode;
 
-    const matchesCountryList = countryLists.some((list) =>
-      list.some(
-        (code) =>
-          typeof code === "string" &&
-          code.toUpperCase() === normalizedCountryCode
-      )
-    );
+      const matchesCountryList =
+        countryLists.some((list) =>
+          list.some(
+            (code) =>
+              typeof code === "string" &&
+              code.toUpperCase() ===
+                normalizedCountryCode
+          )
+        );
 
-    const isEnabled =
-      provider.enabled !== false &&
-      provider.status !== "inactive" &&
-      provider.status !== "disabled";
+      const isEnabled =
+        provider.enabled !== false &&
+        provider.status !== "inactive" &&
+        provider.status !== "disabled";
 
-    return (
-      isEnabled &&
-      (matchesSingleCountry || matchesCountryList)
-    );
-  });
+      return (
+        isEnabled &&
+        (matchesSingleCountry ||
+          matchesCountryList)
+      );
+    }
+  );
 }
 
-function getCountryCurrency(
-  country?: CountryRecord
-): string {
-  if (!country) {
-    return "";
-  }
-
-  if (
-    typeof country.currency === "string" &&
-    country.currency.trim()
-  ) {
-    return country.currency;
-  }
-
-  if (
-    typeof country.currencyCode === "string" &&
-    country.currencyCode.trim()
-  ) {
-    return country.currencyCode;
-  }
-
-  if (
-    Array.isArray(country.currencies) &&
-    country.currencies.length > 0
-  ) {
-    return country.currencies[0];
-  }
-
-  return "";
-}
+/* ============================================================
+   PAGE
+============================================================ */
 
 export default function BeneficiariesPage() {
   const { language } = useLanguage();
 
-  const [beneficiaries, setBeneficiaries] = useState<
-    Beneficiary[]
-  >([]);
+  /* ----------------------------------------------------------
+     DATA
+  ---------------------------------------------------------- */
+
+  const [beneficiaries, setBeneficiaries] =
+    useState<Beneficiary[]>([]);
+
+  /* ----------------------------------------------------------
+     FORM
+  ---------------------------------------------------------- */
 
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
-  const [country, setCountry] = useState("");
-  const [relationship, setRelationship] = useState("");
-  const [provider, setProvider] = useState("");
 
-  const [search, setSearch] = useState("");
-  const [isLoading, setIsLoading] = useState(true);
-  const [isSaving, setIsSaving] = useState(false);
-  const [deletingId, setDeletingId] = useState<
-    string | null
-  >(null);
-  const [message, setMessage] = useState("");
-  const [errorMessage, setErrorMessage] = useState("");
+  // This state intentionally stores the ISO code.
+  // Example: CF, CM, SN, NG.
+  const [country, setCountry] = useState("");
+
+  const [relationship, setRelationship] =
+    useState("");
+
+  const [provider, setProvider] =
+    useState("");
+
+  /* ----------------------------------------------------------
+     UI STATE
+  ---------------------------------------------------------- */
+
+  const [search, setSearch] =
+    useState("");
+
+  const [isLoading, setIsLoading] =
+    useState(true);
+
+  const [isSaving, setIsSaving] =
+    useState(false);
+
+  const [deletingId, setDeletingId] =
+    useState<string | null>(null);
+
+  const [message, setMessage] =
+    useState("");
+
+  const [errorMessage, setErrorMessage] =
+    useState("");
+
+  /* ==========================================================
+     COUNTRIES
+  ========================================================== */
 
   const countries = useMemo(() => {
-    return [...readCountries()].sort((a, b) =>
-      getLocalizedCountryName(a, language).localeCompare(
-        getLocalizedCountryName(b, language),
-        language === "fr" ? "fr" : "en"
-      )
+    return [...readCountries()].sort(
+      (a, b) =>
+        getLocalizedCountryName(
+          a,
+          language
+        ).localeCompare(
+          getLocalizedCountryName(
+            b,
+            language
+          ),
+          language === "fr"
+            ? "fr"
+            : "en"
+        )
     );
   }, [language]);
 
-  const selectedCountry = useMemo(() => {
-    return countries.find(
-      (item) =>
-        item.code.toUpperCase() === country.toUpperCase()
-    );
-  }, [countries, country]);
-
-  const currency = useMemo(() => {
-    return getCountryCurrency(selectedCountry);
-  }, [selectedCountry]);
-
-  const availableProviders = useMemo(() => {
-    return getProvidersForCountry(country).sort((a, b) =>
-      getLocalizedProviderName(a, language).localeCompare(
-        getLocalizedProviderName(b, language),
-        language === "fr" ? "fr" : "en"
-      )
-    );
-  }, [country, language]);
-
-  const filteredBeneficiaries = useMemo(() => {
-    const normalizedSearch = search.trim().toLowerCase();
-
-    if (!normalizedSearch) {
-      return beneficiaries;
-    }
-
-    return beneficiaries.filter((beneficiary) => {
-      const searchableText = [
-        beneficiary.name,
-        beneficiary.phone,
-        beneficiary.country,
-        beneficiary.relationship,
-        beneficiary.provider,
-      ]
-        .join(" ")
-        .toLowerCase();
-
-      return searchableText.includes(normalizedSearch);
-    });
-  }, [beneficiaries, search]);
-
-  const resolveCountryName = useCallback(
-    (countryValue: string): string => {
-      const matchingCountry = countries.find(
+  const selectedCountry =
+    useMemo(() => {
+      return countries.find(
         (item) =>
           item.code.toUpperCase() ===
-          countryValue.toUpperCase()
+          country.toUpperCase()
       );
+    }, [countries, country]);
 
-      return matchingCountry
-        ? getLocalizedCountryName(
-            matchingCountry,
+  const currency = useMemo(() => {
+    return getCountryCurrency(
+      selectedCountry
+    );
+  }, [selectedCountry]);
+
+  /* ==========================================================
+     PROVIDERS
+  ========================================================== */
+
+  const availableProviders =
+    useMemo(() => {
+      return getProvidersForCountry(
+        country
+      ).sort((a, b) =>
+        getLocalizedProviderName(
+          a,
+          language
+        ).localeCompare(
+          getLocalizedProviderName(
+            b,
             language
+          ),
+          language === "fr"
+            ? "fr"
+            : "en"
+        )
+      );
+    }, [country, language]);
+
+  /* ==========================================================
+     SEARCH
+  ========================================================== */
+
+  const filteredBeneficiaries =
+    useMemo(() => {
+      const normalizedSearch =
+        search
+          .trim()
+          .toLowerCase();
+
+      if (!normalizedSearch) {
+        return beneficiaries;
+      }
+
+      return beneficiaries.filter(
+        (beneficiary) => {
+          const searchableText = [
+            beneficiary.name,
+            beneficiary.phone,
+            beneficiary.country,
+            beneficiary.country_code,
+            beneficiary.relationship,
+            beneficiary.provider,
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+
+          return searchableText.includes(
+            normalizedSearch
+          );
+        }
+      );
+    }, [beneficiaries, search]);
+
+  /* ==========================================================
+     DISPLAY COUNTRY
+  ========================================================== */
+
+  const resolveCountryName =
+    useCallback(
+      (
+        countryValue: string
+      ): string => {
+        if (!countryValue) {
+          return "";
+        }
+
+        const matchingCountry =
+          countries.find(
+            (item) =>
+              item.code.toUpperCase() ===
+              countryValue.toUpperCase()
+          );
+
+        return matchingCountry
+          ? getLocalizedCountryName(
+              matchingCountry,
+              language
+            )
+          : countryValue;
+      },
+      [countries, language]
+    );
+
+  /* ==========================================================
+     DISPLAY PROVIDER
+  ========================================================== */
+
+  const resolveProviderName =
+    useCallback(
+      (
+        providerValue: string
+      ): string => {
+        const matchingProvider =
+          readAllProviders().find(
+            (item) =>
+              item.id === providerValue ||
+              item.name ===
+                providerValue ||
+              item.nameEn ===
+                providerValue ||
+              item.nameFr ===
+                providerValue ||
+              item.displayName ===
+                providerValue
+          );
+
+        return matchingProvider
+          ? getLocalizedProviderName(
+              matchingProvider,
+              language
+            )
+          : providerValue;
+      },
+      [language]
+    );
+
+  /* ==========================================================
+     LOAD BENEFICIARIES
+  ========================================================== */
+
+  const fetchBeneficiaries =
+    useCallback(async () => {
+      setIsLoading(true);
+      setErrorMessage("");
+
+      const {
+        data: { session },
+        error: sessionError,
+      } =
+        await supabase.auth.getSession();
+
+      if (sessionError) {
+        setErrorMessage(
+          sessionError.message
+        );
+
+        setIsLoading(false);
+        return;
+      }
+
+      if (!session) {
+        setBeneficiaries([]);
+
+        setErrorMessage(
+          language === "fr"
+            ? "Veuillez vous connecter pour consulter vos bénéficiaires."
+            : "Please sign in to view your beneficiaries."
+        );
+
+        setIsLoading(false);
+        return;
+      }
+
+      const { data, error } =
+        await supabase
+          .from("beneficiaries")
+          .select(
+            `
+              id,
+              user_id,
+              name,
+              phone,
+              country,
+              country_code,
+              relationship,
+              provider,
+              created_at
+            `
           )
-        : countryValue;
-    },
-    [countries, language]
-  );
-
-  const resolveProviderName = useCallback(
-    (providerValue: string): string => {
-      const matchingProvider = readAllProviders().find(
-        (item) =>
-          item.id === providerValue ||
-          item.name === providerValue ||
-          item.nameEn === providerValue ||
-          item.nameFr === providerValue ||
-          item.displayName === providerValue
-      );
-
-      return matchingProvider
-        ? getLocalizedProviderName(
-            matchingProvider,
-            language
+          .eq(
+            "user_id",
+            session.user.id
           )
-        : providerValue;
-    },
-    [language]
-  );
+          .order("created_at", {
+            ascending: false,
+          });
 
-  const fetchBeneficiaries = useCallback(async () => {
-    setIsLoading(true);
-    setErrorMessage("");
+      if (error) {
+        setErrorMessage(
+          error.message
+        );
 
-    const {
-      data: { session },
-      error: sessionError,
-    } = await supabase.auth.getSession();
+        setBeneficiaries([]);
+      } else {
+        setBeneficiaries(
+          (data || []) as Beneficiary[]
+        );
+      }
 
-    if (sessionError) {
-      setErrorMessage(sessionError.message);
       setIsLoading(false);
-      return;
-    }
-
-    if (!session) {
-      setBeneficiaries([]);
-      setErrorMessage(
-        language === "fr"
-          ? "Veuillez vous connecter pour consulter vos bénéficiaires."
-          : "Please sign in to view your beneficiaries."
-      );
-      setIsLoading(false);
-      return;
-    }
-
-    const { data, error } = await supabase
-      .from("beneficiaries")
-      .select("*")
-      .eq("user_id", session.user.id)
-      .order("created_at", {
-        ascending: false,
-      });
-
-    if (error) {
-      setErrorMessage(error.message);
-      setBeneficiaries([]);
-    } else {
-      setBeneficiaries(
-        (data || []) as Beneficiary[]
-      );
-    }
-
-    setIsLoading(false);
-  }, [language]);
+    }, [language]);
 
   useEffect(() => {
     void fetchBeneficiaries();
   }, [fetchBeneficiaries]);
 
+  /* ----------------------------------------------------------
+     Reset provider whenever country changes.
+  ---------------------------------------------------------- */
+
   useEffect(() => {
     setProvider("");
   }, [country]);
+
+  /* ==========================================================
+     RESET FORM
+  ========================================================== */
 
   const resetForm = () => {
     setName("");
@@ -457,138 +661,257 @@ export default function BeneficiariesPage() {
     setProvider("");
   };
 
-  const saveBeneficiary = async () => {
-    setMessage("");
-    setErrorMessage("");
+  /* ==========================================================
+     SAVE BENEFICIARY
+  ========================================================== */
 
-    const trimmedName = name.trim();
-    const trimmedPhone = phone.trim();
-    const trimmedRelationship = relationship.trim();
+  const saveBeneficiary =
+    async () => {
+      setMessage("");
+      setErrorMessage("");
 
-    if (
-      !trimmedName ||
-      !trimmedPhone ||
-      !country ||
-      !provider
-    ) {
-      setErrorMessage(
+      const trimmedName =
+        name.trim();
+
+      const trimmedPhone =
+        phone.trim();
+
+      const trimmedRelationship =
+        relationship.trim();
+
+      if (
+        !trimmedName ||
+        !trimmedPhone ||
+        !country ||
+        !provider
+      ) {
+        setErrorMessage(
+          language === "fr"
+            ? "Veuillez remplir le nom, le téléphone, le pays et le fournisseur."
+            : "Please complete the name, phone, country, and provider fields."
+        );
+
+        return;
+      }
+
+      /* ------------------------------------------------------
+         Validate selected country
+      ------------------------------------------------------ */
+
+      const selectedCountryRecord =
+        countries.find(
+          (item) =>
+            item.code.toUpperCase() ===
+            country.toUpperCase()
+        );
+
+      if (!selectedCountryRecord) {
+        setErrorMessage(
+          language === "fr"
+            ? "Le pays sélectionné est invalide."
+            : "The selected country is invalid."
+        );
+
+        return;
+      }
+
+      const countryCode =
+        selectedCountryRecord.code
+          .trim()
+          .toUpperCase();
+
+      /*
+       * Store a stable readable country name.
+       *
+       * Prefer the library's English/base name for database
+       * consistency instead of changing the stored database
+       * value whenever the user changes UI language.
+       *
+       * country_code remains the authoritative machine-readable
+       * identifier used by Pharmacy and other services.
+       */
+      const countryName =
+        (
+          selectedCountryRecord.nameEn ||
+          selectedCountryRecord.name ||
+          selectedCountryRecord.nameFr ||
+          countryCode
+        ).trim();
+
+      /* ------------------------------------------------------
+         Session
+      ------------------------------------------------------ */
+
+      const {
+        data: { session },
+        error: sessionError,
+      } =
+        await supabase.auth.getSession();
+
+      if (sessionError) {
+        setErrorMessage(
+          sessionError.message
+        );
+
+        return;
+      }
+
+      if (!session) {
+        setErrorMessage(
+          language === "fr"
+            ? "Vous devez être connecté pour enregistrer un bénéficiaire."
+            : "You must be signed in to save a beneficiary."
+        );
+
+        return;
+      }
+
+      setIsSaving(true);
+
+      /* ------------------------------------------------------
+         INSERT
+
+         country      = readable name
+         country_code = ISO code
+      ------------------------------------------------------ */
+
+      const { error } =
+        await supabase
+          .from("beneficiaries")
+          .insert([
+            {
+              user_id:
+                session.user.id,
+
+              name:
+                trimmedName,
+
+              phone:
+                trimmedPhone,
+
+              country:
+                countryName,
+
+              country_code:
+                countryCode,
+
+              relationship:
+                trimmedRelationship,
+
+              provider,
+            },
+          ]);
+
+      setIsSaving(false);
+
+      if (error) {
+        setErrorMessage(
+          error.message
+        );
+
+        return;
+      }
+
+      resetForm();
+
+      await fetchBeneficiaries();
+
+      setMessage(
         language === "fr"
-          ? "Veuillez remplir le nom, le téléphone, le pays et le fournisseur."
-          : "Please complete the name, phone, country, and provider fields."
+          ? "Bénéficiaire enregistré avec succès."
+          : "Beneficiary saved successfully."
       );
-      return;
-    }
+    };
 
-    const {
-      data: { session },
-      error: sessionError,
-    } = await supabase.auth.getSession();
+  /* ==========================================================
+     DELETE BENEFICIARY
+  ========================================================== */
 
-    if (sessionError) {
-      setErrorMessage(sessionError.message);
-      return;
-    }
+  const deleteBeneficiary =
+    async (
+      beneficiary: Beneficiary
+    ) => {
+      const confirmed =
+        window.confirm(
+          language === "fr"
+            ? `Supprimer ${beneficiary.name} de vos bénéficiaires ?`
+            : `Delete ${beneficiary.name} from your beneficiaries?`
+        );
 
-    if (!session) {
-      setErrorMessage(
-        language === "fr"
-          ? "Vous devez être connecté pour enregistrer un bénéficiaire."
-          : "You must be signed in to save a beneficiary."
+      if (!confirmed) {
+        return;
+      }
+
+      setDeletingId(
+        beneficiary.id
       );
-      return;
-    }
 
-    setIsSaving(true);
+      setMessage("");
+      setErrorMessage("");
 
-    const { error } = await supabase
-      .from("beneficiaries")
-      .insert([
-        {
-          user_id: session.user.id,
-          name: trimmedName,
-          phone: trimmedPhone,
-          country,
-          relationship: trimmedRelationship,
-          provider,
-        },
-      ]);
+      const {
+        data: { session },
+        error: sessionError,
+      } =
+        await supabase.auth.getSession();
 
-    setIsSaving(false);
+      if (sessionError) {
+        setErrorMessage(
+          sessionError.message
+        );
 
-    if (error) {
-      setErrorMessage(error.message);
-      return;
-    }
+        setDeletingId(null);
 
-    resetForm();
-    await fetchBeneficiaries();
+        return;
+      }
 
-    setMessage(
-      language === "fr"
-        ? "Bénéficiaire enregistré avec succès."
-        : "Beneficiary saved successfully."
-    );
-  };
+      if (!session) {
+        setErrorMessage(
+          language === "fr"
+            ? "Vous devez être connecté."
+            : "You must be signed in."
+        );
 
-  const deleteBeneficiary = async (
-    beneficiary: Beneficiary
-  ) => {
-    const confirmed = window.confirm(
-      language === "fr"
-        ? `Supprimer ${beneficiary.name} de vos bénéficiaires ?`
-        : `Delete ${beneficiary.name} from your beneficiaries?`
-    );
+        setDeletingId(null);
 
-    if (!confirmed) {
-      return;
-    }
+        return;
+      }
 
-    setDeletingId(beneficiary.id);
-    setMessage("");
-    setErrorMessage("");
+      const { error } =
+        await supabase
+          .from("beneficiaries")
+          .delete()
+          .eq(
+            "id",
+            beneficiary.id
+          )
+          .eq(
+            "user_id",
+            session.user.id
+          );
 
-    const {
-      data: { session },
-      error: sessionError,
-    } = await supabase.auth.getSession();
-
-    if (sessionError) {
-      setErrorMessage(sessionError.message);
       setDeletingId(null);
-      return;
-    }
 
-    if (!session) {
-      setErrorMessage(
+      if (error) {
+        setErrorMessage(
+          error.message
+        );
+
+        return;
+      }
+
+      await fetchBeneficiaries();
+
+      setMessage(
         language === "fr"
-          ? "Vous devez être connecté."
-          : "You must be signed in."
+          ? "Bénéficiaire supprimé."
+          : "Beneficiary deleted."
       );
-      setDeletingId(null);
-      return;
-    }
+    };
 
-    const { error } = await supabase
-      .from("beneficiaries")
-      .delete()
-      .eq("id", beneficiary.id)
-      .eq("user_id", session.user.id);
-
-    setDeletingId(null);
-
-    if (error) {
-      setErrorMessage(error.message);
-      return;
-    }
-
-    await fetchBeneficiaries();
-
-    setMessage(
-      language === "fr"
-        ? "Bénéficiaire supprimé."
-        : "Beneficiary deleted."
-    );
-  };
+  /* ==========================================================
+     PAGE UI
+  ========================================================== */
 
   return (
     <>
@@ -596,7 +919,13 @@ export default function BeneficiariesPage() {
 
       <main className="min-h-screen bg-gray-100 px-4 py-8 sm:px-6 lg:px-8">
         <div className="mx-auto max-w-6xl">
+
+          {/* ==================================================
+              ADD BENEFICIARY
+          ================================================== */}
+
           <section className="mb-8 rounded-3xl bg-white p-6 shadow-lg sm:p-8">
+
             <div className="mb-6">
               <h1 className="text-3xl font-bold text-green-700 sm:text-4xl">
                 {language === "fr"
@@ -611,6 +940,8 @@ export default function BeneficiariesPage() {
               </p>
             </div>
 
+            {/* SUCCESS */}
+
             {message && (
               <div
                 role="status"
@@ -619,6 +950,8 @@ export default function BeneficiariesPage() {
                 {message}
               </div>
             )}
+
+            {/* ERROR */}
 
             {errorMessage && (
               <div
@@ -630,6 +963,9 @@ export default function BeneficiariesPage() {
             )}
 
             <div className="grid gap-4 md:grid-cols-2">
+
+              {/* NAME */}
+
               <label className="flex flex-col gap-2">
                 <span className="font-medium text-gray-700">
                   {language === "fr"
@@ -641,7 +977,9 @@ export default function BeneficiariesPage() {
                   type="text"
                   value={name}
                   onChange={(event) =>
-                    setName(event.target.value)
+                    setName(
+                      event.target.value
+                    )
                   }
                   placeholder={
                     language === "fr"
@@ -652,6 +990,8 @@ export default function BeneficiariesPage() {
                   className="rounded-xl border border-gray-300 p-3 outline-none transition focus:border-green-600 focus:ring-2 focus:ring-green-100"
                 />
               </label>
+
+              {/* PHONE */}
 
               <label className="flex flex-col gap-2">
                 <span className="font-medium text-gray-700">
@@ -664,7 +1004,9 @@ export default function BeneficiariesPage() {
                   type="tel"
                   value={phone}
                   onChange={(event) =>
-                    setPhone(event.target.value)
+                    setPhone(
+                      event.target.value
+                    )
                   }
                   placeholder={
                     language === "fr"
@@ -676,6 +1018,8 @@ export default function BeneficiariesPage() {
                 />
               </label>
 
+              {/* COUNTRY */}
+
               <label className="flex flex-col gap-2">
                 <span className="font-medium text-gray-700">
                   {language === "fr"
@@ -686,7 +1030,9 @@ export default function BeneficiariesPage() {
                 <select
                   value={country}
                   onChange={(event) =>
-                    setCountry(event.target.value)
+                    setCountry(
+                      event.target.value
+                    )
                   }
                   className="rounded-xl border border-gray-300 bg-white p-3 outline-none transition focus:border-green-600 focus:ring-2 focus:ring-green-100"
                 >
@@ -696,19 +1042,36 @@ export default function BeneficiariesPage() {
                       : "Select a country"}
                   </option>
 
-                  {countries.map((countryOption) => (
-                    <option
-                      key={countryOption.code}
-                      value={countryOption.code}
-                    >
-                      {getLocalizedCountryName(
-                        countryOption,
-                        language
-                      )}
-                    </option>
-                  ))}
+                  {countries.map(
+                    (
+                      countryOption
+                    ) => (
+                      <option
+                        key={
+                          countryOption.code
+                        }
+                        value={
+                          countryOption.code
+                        }
+                      >
+                        {getLocalizedCountryName(
+                          countryOption,
+                          language
+                        )}
+                      </option>
+                    )
+                  )}
                 </select>
+
+                {selectedCountry && (
+                  <span className="text-sm text-gray-500">
+                    ISO:{" "}
+                    {selectedCountry.code.toUpperCase()}
+                  </span>
+                )}
               </label>
+
+              {/* RELATIONSHIP */}
 
               <label className="flex flex-col gap-2">
                 <span className="font-medium text-gray-700">
@@ -721,7 +1084,9 @@ export default function BeneficiariesPage() {
                   type="text"
                   value={relationship}
                   onChange={(event) =>
-                    setRelationship(event.target.value)
+                    setRelationship(
+                      event.target.value
+                    )
                   }
                   placeholder={
                     language === "fr"
@@ -731,6 +1096,8 @@ export default function BeneficiariesPage() {
                   className="rounded-xl border border-gray-300 p-3 outline-none transition focus:border-green-600 focus:ring-2 focus:ring-green-100"
                 />
               </label>
+
+              {/* PROVIDER */}
 
               <label className="flex flex-col gap-2">
                 <span className="font-medium text-gray-700">
@@ -742,7 +1109,9 @@ export default function BeneficiariesPage() {
                 <select
                   value={provider}
                   onChange={(event) =>
-                    setProvider(event.target.value)
+                    setProvider(
+                      event.target.value
+                    )
                   }
                   disabled={!country}
                   className="rounded-xl border border-gray-300 bg-white p-3 outline-none transition disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500 focus:border-green-600 focus:ring-2 focus:ring-green-100"
@@ -758,10 +1127,16 @@ export default function BeneficiariesPage() {
                   </option>
 
                   {availableProviders.map(
-                    (providerOption) => (
+                    (
+                      providerOption
+                    ) => (
                       <option
-                        key={providerOption.id}
-                        value={providerOption.id}
+                        key={
+                          providerOption.id
+                        }
+                        value={
+                          providerOption.id
+                        }
                       >
                         {getLocalizedProviderName(
                           providerOption,
@@ -773,7 +1148,8 @@ export default function BeneficiariesPage() {
                 </select>
 
                 {country &&
-                  availableProviders.length === 0 && (
+                  availableProviders.length ===
+                    0 && (
                     <span className="text-sm text-amber-700">
                       {language === "fr"
                         ? "Aucun fournisseur n’est configuré pour ce pays dans providers.ts."
@@ -781,6 +1157,8 @@ export default function BeneficiariesPage() {
                     </span>
                   )}
               </label>
+
+              {/* CURRENCY */}
 
               <label className="flex flex-col gap-2">
                 <span className="font-medium text-gray-700">
@@ -801,11 +1179,16 @@ export default function BeneficiariesPage() {
                   className="rounded-xl border border-gray-300 bg-gray-100 p-3 text-gray-700"
                 />
               </label>
+
             </div>
+
+            {/* SAVE */}
 
             <button
               type="button"
-              onClick={saveBeneficiary}
+              onClick={
+                saveBeneficiary
+              }
               disabled={isSaving}
               className="mt-6 rounded-xl bg-green-600 px-6 py-3 font-semibold text-white transition hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-green-400"
             >
@@ -817,10 +1200,17 @@ export default function BeneficiariesPage() {
                   ? "Enregistrer le bénéficiaire"
                   : "Save beneficiary"}
             </button>
+
           </section>
 
+          {/* ==================================================
+              BENEFICIARY LIST
+          ================================================== */}
+
           <section className="rounded-3xl bg-white p-6 shadow-lg sm:p-8">
+
             <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+
               <div>
                 <h2 className="text-2xl font-bold text-green-700">
                   {language === "fr"
@@ -835,11 +1225,15 @@ export default function BeneficiariesPage() {
                 </p>
               </div>
 
+              {/* SEARCH */}
+
               <input
                 type="search"
                 value={search}
                 onChange={(event) =>
-                  setSearch(event.target.value)
+                  setSearch(
+                    event.target.value
+                  )
                 }
                 placeholder={
                   language === "fr"
@@ -848,7 +1242,10 @@ export default function BeneficiariesPage() {
                 }
                 className="w-full rounded-xl border border-gray-300 p-3 outline-none transition focus:border-green-600 focus:ring-2 focus:ring-green-100 md:max-w-sm"
               />
+
             </div>
+
+            {/* LOADING */}
 
             {isLoading ? (
               <p className="text-gray-500">
@@ -856,8 +1253,14 @@ export default function BeneficiariesPage() {
                   ? "Chargement des bénéficiaires..."
                   : "Loading beneficiaries..."}
               </p>
-            ) : beneficiaries.length === 0 ? (
+
+            ) : beneficiaries.length ===
+              0 ? (
+
+              /* EMPTY */
+
               <div className="rounded-2xl border border-dashed border-gray-300 bg-gray-50 p-8 text-center">
+
                 <p className="font-medium text-gray-700">
                   {language === "fr"
                     ? "Aucun bénéficiaire enregistré."
@@ -869,30 +1272,54 @@ export default function BeneficiariesPage() {
                     ? "Utilisez le formulaire ci-dessus pour ajouter votre premier bénéficiaire."
                     : "Use the form above to add your first beneficiary."}
                 </p>
+
               </div>
-            ) : filteredBeneficiaries.length === 0 ? (
+
+            ) : filteredBeneficiaries.length ===
+              0 ? (
+
+              /* SEARCH EMPTY */
+
               <p className="text-gray-500">
                 {language === "fr"
                   ? "Aucun bénéficiaire ne correspond à votre recherche."
                   : "No beneficiaries match your search."}
               </p>
+
             ) : (
+
+              /* BENEFICIARY CARDS */
+
               <div className="grid gap-4 md:grid-cols-2">
+
                 {filteredBeneficiaries.map(
-                  (beneficiary) => (
+                  (
+                    beneficiary
+                  ) => (
+
                     <article
-                      key={beneficiary.id}
+                      key={
+                        beneficiary.id
+                      }
                       className="rounded-2xl border border-gray-200 p-5 transition hover:border-green-300 hover:shadow-md"
                     >
+
                       <div className="flex items-start justify-between gap-4">
+
                         <div className="min-w-0">
+
                           <h3 className="truncate text-lg font-bold text-gray-900">
-                            {beneficiary.name}
+                            {
+                              beneficiary.name
+                            }
                           </h3>
 
                           <p className="mt-1 text-gray-700">
-                            {beneficiary.phone}
+                            {
+                              beneficiary.phone
+                            }
                           </p>
+
                         </div>
 
                         <div
@@ -902,12 +1329,18 @@ export default function BeneficiariesPage() {
                           {beneficiary.name
                             ?.trim()
                             .charAt(0)
-                            .toUpperCase() || "B"}
+                            .toUpperCase() ||
+                            "B"}
                         </div>
+
                       </div>
 
                       <dl className="mt-4 space-y-2 text-sm">
+
+                        {/* COUNTRY */}
+
                         <div className="flex justify-between gap-4">
+
                           <dt className="text-gray-500">
                             {language === "fr"
                               ? "Pays"
@@ -915,13 +1348,37 @@ export default function BeneficiariesPage() {
                           </dt>
 
                           <dd className="text-right font-medium text-gray-800">
-                            {resolveCountryName(
-                              beneficiary.country
-                            )}
+                            {beneficiary.country_code
+                              ? resolveCountryName(
+                                  beneficiary.country_code
+                                )
+                              : beneficiary.country}
                           </dd>
+
                         </div>
 
+                        {/* COUNTRY CODE */}
+
+                        {beneficiary.country_code && (
+                          <div className="flex justify-between gap-4">
+
+                            <dt className="text-gray-500">
+                              {language === "fr"
+                                ? "Code pays"
+                                : "Country code"}
+                            </dt>
+
+                            <dd className="text-right font-medium text-gray-800">
+                              {beneficiary.country_code.toUpperCase()}
+                            </dd>
+
+                          </div>
+                        )}
+
+                        {/* PROVIDER */}
+
                         <div className="flex justify-between gap-4">
+
                           <dt className="text-gray-500">
                             {language === "fr"
                               ? "Fournisseur"
@@ -933,10 +1390,14 @@ export default function BeneficiariesPage() {
                               beneficiary.provider
                             )}
                           </dd>
+
                         </div>
+
+                        {/* RELATIONSHIP */}
 
                         {beneficiary.relationship && (
                           <div className="flex justify-between gap-4">
+
                             <dt className="text-gray-500">
                               {language === "fr"
                                 ? "Relation"
@@ -948,9 +1409,13 @@ export default function BeneficiariesPage() {
                                 beneficiary.relationship
                               }
                             </dd>
+
                           </div>
                         )}
+
                       </dl>
+
+                      {/* DELETE */}
 
                       <button
                         type="button"
@@ -960,11 +1425,13 @@ export default function BeneficiariesPage() {
                           )
                         }
                         disabled={
-                          deletingId === beneficiary.id
+                          deletingId ===
+                          beneficiary.id
                         }
                         className="mt-5 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-red-400"
                       >
-                        {deletingId === beneficiary.id
+                        {deletingId ===
+                        beneficiary.id
                           ? language === "fr"
                             ? "Suppression..."
                             : "Deleting..."
@@ -972,12 +1439,16 @@ export default function BeneficiariesPage() {
                             ? "Supprimer"
                             : "Delete"}
                       </button>
+
                     </article>
                   )
                 )}
+
               </div>
             )}
+
           </section>
+
         </div>
       </main>
     </>
