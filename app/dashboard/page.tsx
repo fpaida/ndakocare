@@ -1,6 +1,8 @@
 "use client";
+
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import Navbar from "../components/Navbar";
 import { supabase } from "../lib/supabase";
 import { useLanguage } from "../context/LanguageContext";
@@ -23,6 +25,8 @@ import {
 } from "react-icons/fa";
 
 export default function DashboardPage() {
+  const router = useRouter();
+
   const { language } = useLanguage();
   const isFr = language === "fr";
 
@@ -31,69 +35,290 @@ export default function DashboardPage() {
   const [communityCount, setCommunityCount] = useState(0);
   const [notificationsCount, setNotificationsCount] = useState(0);
   const [recentActivity, setRecentActivity] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    loadDashboard();
+    void loadDashboard();
   }, []);
 
   const loadDashboard = async () => {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
+    try {
+      /*
+       * ---------------------------------------------------------
+       * 1. GET CURRENT AUTHENTICATED SESSION
+       * ---------------------------------------------------------
+       */
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
 
-    if (!session) return;
+      if (sessionError) {
+        console.error(
+          "Unable to get authenticated session:",
+          sessionError
+        );
+      }
 
-    const userId = session.user.id;
+      /*
+       * No authenticated user:
+       * redirect to login.
+       */
+      if (!session) {
+        router.replace("/login");
+        return;
+      }
 
-    const { data: wallet } = await supabase
-      .from("wallets")
-      .select("balance")
-      .eq("user_id", userId)
-      .single();
+      const userId = session.user.id;
 
-    setWalletBalance(Number(wallet?.balance || 0));
+      /*
+       * ---------------------------------------------------------
+       * 2. CHECK WHETHER USER IS A MERCHANT
+       * ---------------------------------------------------------
+       *
+       * Relationship:
+       *
+       * auth.users.id
+       *      ↓
+       * merchants.user_id
+       *      ↓
+       * Merchant account
+       *
+       * Example:
+       *
+       * merchant.marchecentral@ndakocare.com
+       *      ↓
+       * Marché Central
+       */
+      const {
+        data: merchant,
+        error: merchantError,
+      } = await supabase
+        .from("merchants")
+        .select(
+          `
+            id,
+            name,
+            merchant_type,
+            city,
+            country_code,
+            currency,
+            is_active
+          `
+        )
+        .eq("user_id", userId)
+        .eq("is_active", true)
+        .maybeSingle();
 
-    const { count: savings } = await supabase
-      .from("savings_goals")
-      .select("*", { count: "exact", head: true })
-      .eq("user_id", userId);
+      if (merchantError) {
+        console.error(
+          "Unable to check merchant account:",
+          merchantError
+        );
+      }
 
-    setSavingsCount(savings || 0);
+      /*
+       * Merchant users should NOT use the
+       * regular customer dashboard.
+       *
+       * Send them directly to their merchant portal.
+       */
+      if (merchant) {
+        console.log(
+          "Merchant account detected:",
+          merchant.name
+        );
 
-    const { count: communities } = await supabase
-      .from("community_wallets")
-      .select("*", { count: "exact", head: true })
-      .eq("owner_id", userId);
+        router.replace("/merchant-portal");
+        return;
+      }
 
-    setCommunityCount(communities || 0);
+      /*
+       * ---------------------------------------------------------
+       * 3. CUSTOMER DASHBOARD
+       * ---------------------------------------------------------
+       *
+       * If no merchant account was found,
+       * continue loading the regular customer dashboard.
+       */
 
-    const { count: notifications } = await supabase
-      .from("notifications")
-      .select("*", { count: "exact", head: true })
-      .eq("user_id", userId)
-      .eq("is_read", false);
+      /*
+       * Wallet balance
+       */
+      const { data: wallet, error: walletError } =
+        await supabase
+          .from("wallets")
+          .select("balance")
+          .eq("user_id", userId)
+          .maybeSingle();
 
-    setNotificationsCount(notifications || 0);
+      if (walletError) {
+        console.error(
+          "Unable to load wallet:",
+          walletError
+        );
+      }
 
-    const { data: activity } = await supabase
-      .from("wallet_transactions")
-      .select("*")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false })
-      .limit(5);
+      setWalletBalance(
+        Number(wallet?.balance || 0)
+      );
 
-    setRecentActivity(activity || []);
+      /*
+       * Savings goals
+       */
+      const {
+        count: savings,
+        error: savingsError,
+      } = await supabase
+        .from("savings_goals")
+        .select("*", {
+          count: "exact",
+          head: true,
+        })
+        .eq("user_id", userId);
+
+      if (savingsError) {
+        console.error(
+          "Unable to load savings goals:",
+          savingsError
+        );
+      }
+
+      setSavingsCount(savings || 0);
+
+      /*
+       * Community wallets
+       */
+      const {
+        count: communities,
+        error: communitiesError,
+      } = await supabase
+        .from("community_wallets")
+        .select("*", {
+          count: "exact",
+          head: true,
+        })
+        .eq("owner_id", userId);
+
+      if (communitiesError) {
+        console.error(
+          "Unable to load community wallets:",
+          communitiesError
+        );
+      }
+
+      setCommunityCount(communities || 0);
+
+      /*
+       * Unread notifications
+       */
+      const {
+        count: notifications,
+        error: notificationsError,
+      } = await supabase
+        .from("notifications")
+        .select("*", {
+          count: "exact",
+          head: true,
+        })
+        .eq("user_id", userId)
+        .eq("is_read", false);
+
+      if (notificationsError) {
+        console.error(
+          "Unable to load notifications:",
+          notificationsError
+        );
+      }
+
+      setNotificationsCount(
+        notifications || 0
+      );
+
+      /*
+       * Recent wallet activity
+       */
+      const {
+        data: activity,
+        error: activityError,
+      } = await supabase
+        .from("wallet_transactions")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", {
+          ascending: false,
+        })
+        .limit(5);
+
+      if (activityError) {
+        console.error(
+          "Unable to load recent activity:",
+          activityError
+        );
+      }
+
+      setRecentActivity(activity || []);
+    } catch (error) {
+      console.error(
+        "Unable to load dashboard:",
+        error
+      );
+    } finally {
+      setLoading(false);
+    }
   };
 
+  /*
+   * ---------------------------------------------------------
+   * LOADING
+   * ---------------------------------------------------------
+   */
+  if (loading) {
+    return (
+      <>
+        <Navbar />
+
+        <main className="min-h-screen bg-gray-100 flex items-center justify-center">
+          <div className="bg-white rounded-3xl shadow-lg p-10 text-center">
+            <div className="text-5xl mb-4">
+              ⏳
+            </div>
+
+            <h2 className="text-2xl font-bold text-green-700">
+              {isFr
+                ? "Chargement..."
+                : "Loading..."}
+            </h2>
+
+            <p className="text-gray-500 mt-2">
+              {isFr
+                ? "Vérification de votre compte NdakoCare."
+                : "Checking your NdakoCare account."}
+            </p>
+          </div>
+        </main>
+      </>
+    );
+  }
+
+  /*
+   * ---------------------------------------------------------
+   * CUSTOMER DASHBOARD
+   * ---------------------------------------------------------
+   */
   return (
     <>
       <Navbar />
 
       <main className="min-h-screen bg-gray-100 p-8">
         <div className="max-w-7xl mx-auto">
+
+          {/* Dashboard heading */}
           <div className="mb-10">
             <h1 className="text-5xl font-bold text-green-700">
-              {isFr ? "Tableau de bord" : "Dashboard"}
+              {isFr
+                ? "Tableau de bord"
+                : "Dashboard"}
             </h1>
 
             <p className="text-gray-600 mt-2">
@@ -103,6 +328,7 @@ export default function DashboardPage() {
             </p>
           </div>
 
+          {/* Welcome */}
           <div className="bg-gradient-to-r from-green-700 to-green-500 text-white rounded-3xl p-8 mb-10 shadow-lg">
             <h2 className="text-3xl font-bold mb-3">
               {isFr
@@ -117,16 +343,28 @@ export default function DashboardPage() {
             </p>
           </div>
 
+          {/* Statistics */}
           <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
+
             <StatCard
-              title={isFr ? "Solde Disponible" : "Available Balance"}
-              value={`$${walletBalance.toFixed(2)}`}
+              title={
+                isFr
+                  ? "Solde Disponible"
+                  : "Available Balance"
+              }
+              value={`$${walletBalance.toFixed(
+                2
+              )}`}
               icon={<FaWallet />}
               color="text-green-700"
             />
 
             <StatCard
-              title={isFr ? "Objectifs d'Épargne" : "Savings Goals"}
+              title={
+                isFr
+                  ? "Objectifs d'Épargne"
+                  : "Savings Goals"
+              }
               value={savingsCount}
               icon={<FaPiggyBank />}
               color="text-pink-600"
@@ -144,7 +382,7 @@ export default function DashboardPage() {
             />
 
             <StatCard
-              title={isFr ? "Notifications" : "Notifications"}
+              title="Notifications"
               value={notificationsCount}
               icon={<FaBell />}
               color="text-yellow-500"
@@ -152,33 +390,55 @@ export default function DashboardPage() {
           </div>
 
           <div className="grid lg:grid-cols-3 gap-8 mb-10 items-start">
+
+            {/* Ecosystem */}
             <div className="lg:col-span-2 bg-white rounded-3xl shadow-lg p-8">
+
               <h2 className="text-3xl font-bold mb-6">
-                {isFr ? "Écosystème NdakoCare" : "NdakoCare Ecosystem"}
+                {isFr
+                  ? "Écosystème NdakoCare"
+                  : "NdakoCare Ecosystem"}
               </h2>
 
               <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
+
                 <DashboardCard
                   href="/wallet"
-                  title={isFr ? "Portefeuille" : "Wallet"}
+                  title={
+                    isFr
+                      ? "Portefeuille"
+                      : "Wallet"
+                  }
                   icon={<FaWallet />}
                 />
 
                 <DashboardCard
                   href="/transfer"
-                  title={isFr ? "Transfert d'Argent" : "Money Transfer"}
+                  title={
+                    isFr
+                      ? "Transfert d'Argent"
+                      : "Money Transfer"
+                  }
                   icon={<FaMoneyBillWave />}
                 />
 
                 <DashboardCard
                   href="/recharge"
-                  title={isFr ? "Recharge Mobile" : "Mobile Recharge"}
+                  title={
+                    isFr
+                      ? "Recharge Mobile"
+                      : "Mobile Recharge"
+                  }
                   icon={<FaMobileAlt />}
                 />
 
                 <DashboardCard
                   href="/savings"
-                  title={isFr ? "Objectifs d'Épargne" : "Savings Goals"}
+                  title={
+                    isFr
+                      ? "Objectifs d'Épargne"
+                      : "Savings Goals"
+                  }
                   icon={<FaPiggyBank />}
                 />
 
@@ -194,110 +454,171 @@ export default function DashboardPage() {
 
                 <DashboardCard
                   href="/merchant-portal"
-                  title={isFr ? "Portail Marchand" : "Merchant Portal"}
+                  title={
+                    isFr
+                      ? "Portail Marchand"
+                      : "Merchant Portal"
+                  }
                   icon={<FaStore />}
                 />
 
                 <DashboardCard
                   href="/grocery"
-                  title={isFr ? "Courses" : "Grocery"}
+                  title={
+                    isFr
+                      ? "Courses"
+                      : "Grocery"
+                  }
                   icon={<FaShoppingCart />}
                 />
 
                 <DashboardCard
                   href="/pharmacy"
-                  title={isFr ? "Pharmacie" : "Pharmacy"}
+                  title={
+                    isFr
+                      ? "Pharmacie"
+                      : "Pharmacy"
+                  }
                   icon={<FaPills />}
                 />
 
                 <DashboardCard
                   href="/pay-school-fees"
-                  title={isFr ? "Frais scolaires" : "School Fees"}
+                  title={
+                    isFr
+                      ? "Frais scolaires"
+                      : "School Fees"
+                  }
                   icon={<FaGraduationCap />}
                 />
 
                 <DashboardCard
                   href="/pay-electricity"
-                  title={isFr ? "Électricité" : "Electricity"}
+                  title={
+                    isFr
+                      ? "Électricité"
+                      : "Electricity"
+                  }
                   icon={<FaBolt />}
                 />
 
                 <DashboardCard
                   href="/pay-tv"
-                  title={isFr ? "Abonnement TV" : "TV Subscription"}
+                  title={
+                    isFr
+                      ? "Abonnement TV"
+                      : "TV Subscription"
+                  }
                   icon={<FaTv />}
                 />
 
                 <DashboardCard
                   href="/beneficiaries"
-                  title={isFr ? "Bénéficiaires" : "Beneficiaries"}
+                  title={
+                    isFr
+                      ? "Bénéficiaires"
+                      : "Beneficiaries"
+                  }
                   icon={<FaUsers />}
                 />
 
                 <DashboardCard
                   href="/my-orders"
-                  title={isFr ? "Suivi des commandes" : "Order Tracking"}
+                  title={
+                    isFr
+                      ? "Suivi des commandes"
+                      : "Order Tracking"
+                  }
                   icon={<FaTruck />}
                 />
 
                 <DashboardCard
                   href="/reports"
-                  title={isFr ? "Rapports" : "Reports"}
+                  title={
+                    isFr
+                      ? "Rapports"
+                      : "Reports"
+                  }
                   icon={<FaReceipt />}
                 />
 
                 <DashboardCard
                   href="/notifications"
-                  title={isFr ? "Notifications" : "Notifications"}
+                  title="Notifications"
                   icon={<FaBell />}
                 />
+
               </div>
             </div>
 
+            {/* Recent Activity */}
             <div className="bg-white rounded-3xl shadow-lg p-8">
+
               <h2 className="text-3xl font-bold mb-6">
-                {isFr ? "Activité récente" : "Recent Activity"}
+                {isFr
+                  ? "Activité récente"
+                  : "Recent Activity"}
               </h2>
 
               {recentActivity.length === 0 ? (
                 <p className="text-gray-500">
-                  {isFr ? "Aucune activité récente." : "No recent activity."}
+                  {isFr
+                    ? "Aucune activité récente."
+                    : "No recent activity."}
                 </p>
               ) : (
                 <div className="space-y-4">
-                  {recentActivity.map((item) => {
-                    const isDeposit =
-                      item.transaction_type === "Deposit";
+                  {recentActivity.map(
+                    (item) => {
+                      const isDeposit =
+                        item.transaction_type ===
+                        "Deposit";
 
-                    return (
-                      <div key={item.id} className="border-b pb-3">
-                        <div className="flex justify-between gap-4">
-                          <p className="font-semibold">
-                            {item.transaction_type}
+                      return (
+                        <div
+                          key={item.id}
+                          className="border-b pb-3"
+                        >
+                          <div className="flex justify-between gap-4">
+
+                            <p className="font-semibold">
+                              {
+                                item.transaction_type
+                              }
+                            </p>
+
+                            <p
+                              className={`font-bold ${
+                                isDeposit
+                                  ? "text-green-700"
+                                  : "text-red-600"
+                              }`}
+                            >
+                              {isDeposit
+                                ? "+"
+                                : "-"}
+                              $
+                              {Number(
+                                item.amount
+                              ).toFixed(2)}
+                            </p>
+                          </div>
+
+                          <p className="text-sm text-gray-500">
+                            {
+                              item.description
+                            }
                           </p>
 
-                          <p
-                            className={`font-bold ${
-                              isDeposit
-                                ? "text-green-700"
-                                : "text-red-600"
-                            }`}
-                          >
-                            {isDeposit ? "+" : "-"}$
-                            {Number(item.amount).toFixed(2)}
+                          <p className="text-xs text-gray-400">
+                            {new Date(
+                              item.created_at
+                            ).toLocaleDateString()}
                           </p>
                         </div>
-
-                        <p className="text-sm text-gray-500">
-                          {item.description}
-                        </p>
-
-                        <p className="text-xs text-gray-400">
-                          {new Date(item.created_at).toLocaleDateString()}
-                        </p>
-                      </div>
-                    );
-                  })}
+                      );
+                    }
+                  )}
                 </div>
               )}
 
@@ -305,7 +626,9 @@ export default function DashboardPage() {
                 href="/activity"
                 className="mt-6 inline-block bg-green-600 hover:bg-green-700 text-white px-5 py-3 rounded-xl font-semibold"
               >
-                {isFr ? "Voir toute l'activité" : "View All Activity"}
+                {isFr
+                  ? "Voir toute l'activité"
+                  : "View All Activity"}
               </Link>
             </div>
           </div>
@@ -314,6 +637,12 @@ export default function DashboardPage() {
     </>
   );
 }
+
+/*
+ * ---------------------------------------------------------
+ * STAT CARD
+ * ---------------------------------------------------------
+ */
 
 function StatCard({
   title,
@@ -329,16 +658,30 @@ function StatCard({
   return (
     <div className="bg-white rounded-3xl shadow-lg p-6">
       <div className="flex justify-between items-center">
+
         <div>
-          <p className="text-gray-500 font-medium">{title}</p>
-          <h2 className="text-4xl font-bold mt-2">{value}</h2>
+          <p className="text-gray-500 font-medium">
+            {title}
+          </p>
+
+          <h2 className="text-4xl font-bold mt-2">
+            {value}
+          </h2>
         </div>
 
-        <div className={`text-4xl ${color}`}>{icon}</div>
+        <div className={`text-4xl ${color}`}>
+          {icon}
+        </div>
       </div>
     </div>
   );
 }
+
+/*
+ * ---------------------------------------------------------
+ * DASHBOARD CARD
+ * ---------------------------------------------------------
+ */
 
 function DashboardCard({
   href,
@@ -354,9 +697,13 @@ function DashboardCard({
       href={href}
       className="bg-gray-50 rounded-2xl p-5 hover:bg-green-50 hover:shadow-lg transition"
     >
-      <div className="text-3xl text-green-700 mb-3">{icon}</div>
+      <div className="text-3xl text-green-700 mb-3">
+        {icon}
+      </div>
 
-      <h3 className="font-bold text-base">{title}</h3>
+      <h3 className="font-bold text-base">
+        {title}
+      </h3>
     </Link>
   );
 }

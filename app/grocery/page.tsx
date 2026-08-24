@@ -1,26 +1,234 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import Navbar from "../components/Navbar";
 import { useLanguage } from "../context/LanguageContext";
 import { supabase } from "../lib/supabase";
 
-import {
-  getCountryName,
-  getSortedAfricanCountries,
-} from "../lib/africa";
+type Beneficiary = {
+  id: string;
+  name: string;
+  phone: string;
+  country: string;
+  country_code: string | null;
+  relationship: string | null;
+  provider: string | null;
+};
 
-import {
-  GROCERY_CATEGORIES,
-  getGroceryProductsByCountry,
-} from "../lib/groceryProducts";
+type Merchant = {
+  id: string;
+  name: string;
+  merchant_type: string | null;
+  country: string | null;
+  country_code: string | null;
+  currency: string | null;
+  city: string | null;
+  address: string | null;
+  phone: string | null;
+  is_active: boolean | null;
+};
 
-type CartItem = {
-  productId: string;
+type GroceryProduct = {
+  id: string;
+  merchant_id: string;
+  name: string;
+  category: string | null;
+  unit: string | null;
+  price: number;
+  currency: string;
+  stock: number;
+  is_active: boolean | null;
+};
+
+type CartItem = GroceryProduct & {
   quantity: number;
 };
+
+type WalletBalance = {
+  id: string;
+  currency: string;
+  balance: number;
+};
+
+type GroceryRpcResult = {
+  success: boolean;
+  duplicate: boolean;
+
+  order_id: number;
+  merchant_order_id: string | null;
+  transaction_id: string | null;
+
+  reference: string;
+  status: string;
+
+  merchant_id: string;
+  merchant_name: string;
+
+  beneficiary_id: string;
+
+  country: string;
+  country_code: string;
+
+  item_count: number;
+
+  subtotal: number;
+  delivery_fee: number;
+  total: number;
+
+  currency: string;
+
+  balance_before: number;
+  balance_after: number;
+};
+
+function normalizeCurrency(value?: string | null) {
+  return (value ?? "").trim().toUpperCase();
+}
+
+function normalizeCountryCode(value?: string | null) {
+  return (value ?? "").trim().toUpperCase();
+}
+
+function formatMoney(
+  amount: number,
+  currency: string,
+  language: string
+) {
+  const normalizedCurrency = normalizeCurrency(currency);
+
+  if (normalizedCurrency === "XAF") {
+    return `FCFA ${new Intl.NumberFormat(
+      language === "fr" ? "fr-FR" : "en-US",
+      {
+        maximumFractionDigits: 0,
+      }
+    ).format(amount)}`;
+  }
+
+  if (normalizedCurrency === "XOF") {
+    return `CFA ${new Intl.NumberFormat(
+      language === "fr" ? "fr-FR" : "en-US",
+      {
+        maximumFractionDigits: 0,
+      }
+    ).format(amount)}`;
+  }
+
+  try {
+    return new Intl.NumberFormat(
+      language === "fr" ? "fr-FR" : "en-US",
+      {
+        style: "currency",
+        currency: normalizedCurrency || "USD",
+      }
+    ).format(amount);
+  } catch {
+    return `${new Intl.NumberFormat(
+      language === "fr" ? "fr-FR" : "en-US"
+    ).format(amount)} ${normalizedCurrency}`;
+  }
+}
+
+function createIdempotencyKey() {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+  ) {
+    return crypto.randomUUID();
+  }
+
+  return `grocery-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2)}`;
+}
+
+// ============================================================
+// GROCERY CATALOG TRANSLATIONS
+//
+// Database values remain canonical.
+// Translation is presentation-only.
+// ============================================================
+
+const PRODUCT_TRANSLATIONS_FR: Record<string, string> = {
+  "Drinking Water": "Eau potable",
+  "Cooking Oil": "Huile de cuisson",
+  Milk: "Lait",
+  Rice: "Riz",
+  Soap: "Savon",
+  Flour: "Farine",
+  Sugar: "Sucre",
+  Bananas: "Bananes",
+  Onions: "Oignons",
+  Tomatoes: "Tomates",
+  Chicken: "Poulet",
+  Eggs: "Œufs",
+};
+
+const CATEGORY_TRANSLATIONS_FR: Record<string, string> = {
+  Beverages: "Boissons",
+  Cooking: "Cuisine",
+  Dairy: "Produits laitiers",
+  Grains: "Céréales",
+  Household: "Produits ménagers",
+  Pantry: "Épicerie",
+  Produce: "Fruits et légumes",
+  Protein: "Protéines",
+};
+
+const UNIT_TRANSLATIONS_FR: Record<string, string> = {
+  "6 bottles": "6 bouteilles",
+  "1 L": "1 L",
+  "5 kg": "5 kg",
+  "1 bar": "1 savon",
+  "1 kg": "1 kg",
+  "1 bunch": "1 régime",
+  "1 whole": "1 entier",
+  "12 eggs": "12 œufs",
+};
+
+function getProductName(
+  productName: string,
+  language: string
+) {
+  if (language !== "fr") {
+    return productName;
+  }
+
+  return PRODUCT_TRANSLATIONS_FR[productName] ?? productName;
+}
+
+function getCategoryName(
+  category: string | null,
+  language: string
+) {
+  if (!category) {
+    return language === "fr" ? "Autres" : "Other";
+  }
+
+  if (language !== "fr") {
+    return category;
+  }
+
+  return CATEGORY_TRANSLATIONS_FR[category] ?? category;
+}
+
+function getUnitName(
+  unit: string | null,
+  language: string
+) {
+  if (!unit) {
+    return language === "fr" ? "Article" : "Item";
+  }
+
+  if (language !== "fr") {
+    return unit;
+  }
+
+  return UNIT_TRANSLATIONS_FR[unit] ?? unit;
+}
 
 export default function GroceryPage() {
   const router = useRouter();
@@ -28,243 +236,169 @@ export default function GroceryPage() {
 
   const isFr = language === "fr";
 
-  const [recipientName, setRecipientName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [country, setCountry] = useState("CF");
-  const [city, setCity] = useState("");
-  const [deliveryType, setDeliveryType] = useState("Pickup");
+  const [beneficiaries, setBeneficiaries] = useState<
+    Beneficiary[]
+  >([]);
 
-  const [selectedCategory, setSelectedCategory] =
-    useState("all");
+  const [merchants, setMerchants] = useState<Merchant[]>([]);
+  const [products, setProducts] = useState<GroceryProduct[]>([]);
 
-  const [cart, setCart] = useState<CartItem[]>([]);
-  const [additionalItems, setAdditionalItems] = useState("");
+  const [cart, setCart] = useState<Record<string, number>>({});
+
+  const [selectedBeneficiaryId, setSelectedBeneficiaryId] =
+    useState("");
+
+  const [selectedMerchantId, setSelectedMerchantId] =
+    useState("");
+
+  const [deliveryType, setDeliveryType] =
+    useState("Delivery");
+
+  const [wallet, setWallet] =
+    useState<WalletBalance | null>(null);
+
+  const [loading, setLoading] = useState(true);
+
+  const [loadingMerchants, setLoadingMerchants] =
+    useState(false);
+
+  const [loadingProducts, setLoadingProducts] =
+    useState(false);
 
   const [submitting, setSubmitting] = useState(false);
-  const [message, setMessage] = useState("");
+
   const [errorMessage, setErrorMessage] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
 
-  /*
-   * Countries
-   */
+  // ============================================================
+  // SELECTED BENEFICIARY
+  // ============================================================
 
-  const countries = useMemo(() => {
-    return getSortedAfricanCountries(isFr ? "fr" : "en");
-  }, [isFr]);
+  const selectedBeneficiary = useMemo(
+    () =>
+      beneficiaries.find(
+        (beneficiary) =>
+          beneficiary.id === selectedBeneficiaryId
+      ) ?? null,
+    [beneficiaries, selectedBeneficiaryId]
+  );
 
-  const selectedCountry = useMemo(() => {
-    return countries.find(
-      (item) => item.code === country
-    );
-  }, [countries, country]);
+  // ============================================================
+  // SELECTED MERCHANT
+  // ============================================================
 
-  /*
-   * Grocery catalog
-   */
+  const selectedMerchant = useMemo(
+    () =>
+      merchants.find(
+        (merchant) => merchant.id === selectedMerchantId
+      ) ?? null,
+    [merchants, selectedMerchantId]
+  );
 
-  const countryProducts = useMemo(() => {
-    return getGroceryProductsByCountry(country);
-  }, [country]);
+  // ============================================================
+  // CART ITEMS
+  // ============================================================
 
-  const groceryProducts = useMemo(() => {
-    if (selectedCategory === "all") {
-      return countryProducts;
-    }
+  const cartItems = useMemo<CartItem[]>(() => {
+    return products
+      .filter((product) => (cart[product.id] ?? 0) > 0)
+      .map((product) => ({
+        ...product,
+        quantity: cart[product.id],
+      }));
+  }, [products, cart]);
 
-    return countryProducts.filter(
-      (product) =>
-        product.category === selectedCategory
-    );
-  }, [countryProducts, selectedCategory]);
+  // ============================================================
+  // TOTALS
+  // ============================================================
 
-  /*
-   * Cart
-   */
-
-  const cartDetails = useMemo(() => {
-    return cart
-      .map((cartItem) => {
-        const product = countryProducts.find(
-          (item) => item.id === cartItem.productId
-        );
-
-        if (!product) {
-          return null;
-        }
-
-        return {
-          ...cartItem,
-          product,
-          lineTotal:
-            product.price * cartItem.quantity,
-        };
-      })
-      .filter(
-        (
-          item
-        ): item is NonNullable<typeof item> =>
-          item !== null
-      );
-  }, [cart, countryProducts]);
-
-  const cartSubtotal = useMemo(() => {
-    return cartDetails.reduce(
+  const subtotal = useMemo(() => {
+    return cartItems.reduce(
       (total, item) =>
-        total + item.lineTotal,
+        total + Number(item.price) * item.quantity,
       0
     );
-  }, [cartDetails]);
+  }, [cartItems]);
 
-  const cartItemCount = useMemo(() => {
-    return cart.reduce(
-      (total, item) =>
-        total + item.quantity,
-      0
-    );
-  }, [cart]);
+  const deliveryFee = 0;
 
-  const getQuantity = (productId: string) => {
-    return (
-      cart.find(
-        (item) => item.productId === productId
-      )?.quantity ?? 0
-    );
-  };
+  const total = subtotal + deliveryFee;
 
-  const increaseQuantity = (productId: string) => {
-    setCart((currentCart) => {
-      const existingItem = currentCart.find(
-        (item) => item.productId === productId
-      );
+  const balance = Number(wallet?.balance ?? 0);
 
-      if (existingItem) {
-        return currentCart.map((item) =>
-          item.productId === productId
-            ? {
-                ...item,
-                quantity: item.quantity + 1,
-              }
-            : item
-        );
-      }
+  const balanceAfter = balance - total;
 
-      return [
-        ...currentCart,
-        {
-          productId,
-          quantity: 1,
-        },
-      ];
-    });
-  };
+  const hasEnoughBalance =
+    wallet !== null && balance >= total;
 
-  const decreaseQuantity = (productId: string) => {
-    setCart((currentCart) =>
-      currentCart
-        .map((item) =>
-          item.productId === productId
-            ? {
-                ...item,
-                quantity: item.quantity - 1,
-              }
-            : item
-        )
-        .filter((item) => item.quantity > 0)
-    );
-  };
+  // ============================================================
+  // CATEGORIES
+  // ============================================================
 
-  const removeFromCart = (productId: string) => {
-    setCart((currentCart) =>
-      currentCart.filter(
-        (item) => item.productId !== productId
+  const categories = useMemo(() => {
+    return Array.from(
+      new Set(
+        products
+          .map((product) => product.category)
+          .filter(
+            (category): category is string =>
+              Boolean(category)
+          )
       )
     );
-  };
+  }, [products]);
 
-  /*
-   * Formatting
-   */
+  // ============================================================
+  // INITIAL PAGE LOAD
+  // ============================================================
 
-  const formatPrice = (
-    amount: number,
-    currency: string
-  ) => {
-    return `${new Intl.NumberFormat(
-      isFr ? "fr-FR" : "en-US"
-    ).format(amount)} ${currency}`;
-  };
+  useEffect(() => {
+    void initializePage();
+  }, []);
 
-  const buildOrderItemsText = () => {
-    const catalogLines = cartDetails.map(
-      ({ product, quantity, lineTotal }) => {
-        const productName = isFr
-          ? product.name.fr
-          : product.name.en;
+  // ============================================================
+  // BENEFICIARY CHANGE
+  // ============================================================
 
-        return `${productName} — ${
-          product.unit
-        } × ${quantity} — ${formatPrice(
-          lineTotal,
-          product.currency
-        )}`;
-      }
-    );
-
-    if (additionalItems.trim()) {
-      catalogLines.push(
-        `${
-          isFr
-            ? "Articles supplémentaires"
-            : "Additional items"
-        }: ${additionalItems.trim()}`
-      );
-    }
-
-    return catalogLines.join("\n");
-  };
-
-  /*
-   * Order submission
-   */
-
-  const handleSubmit = async (
-    event: FormEvent<HTMLFormElement>
-  ) => {
-    event.preventDefault();
-
-    setMessage("");
-    setErrorMessage("");
-
-    if (
-      !recipientName.trim() ||
-      !phone.trim() ||
-      !country ||
-      !city.trim()
-    ) {
-      setErrorMessage(
-        isFr
-          ? "Veuillez remplir tous les champs obligatoires."
-          : "Please complete all required fields."
-      );
-
+  useEffect(() => {
+    if (!selectedBeneficiary) {
+      setMerchants([]);
+      setSelectedMerchantId("");
+      setProducts([]);
+      setCart({});
+      setWallet(null);
       return;
     }
 
-    if (
-      cart.length === 0 &&
-      !additionalItems.trim()
-    ) {
-      setErrorMessage(
-        isFr
-          ? "Veuillez sélectionner au moins un produit ou ajouter une demande supplémentaire."
-          : "Please select at least one product or enter an additional grocery request."
-      );
+    void loadMerchantsForBeneficiary(selectedBeneficiary);
+  }, [selectedBeneficiary]);
 
+  // ============================================================
+  // MERCHANT CHANGE
+  // ============================================================
+
+  useEffect(() => {
+    if (!selectedMerchant) {
+      setProducts([]);
+      setCart({});
+      setWallet(null);
       return;
     }
 
+    void Promise.all([
+      loadProducts(selectedMerchant),
+      loadWallet(selectedMerchant.currency),
+    ]);
+  }, [selectedMerchant]);
+
+  // ============================================================
+  // INITIALIZE
+  // ============================================================
+
+  async function initializePage() {
     try {
-      setSubmitting(true);
+      setLoading(true);
+      setErrorMessage("");
 
       const {
         data: { user },
@@ -272,806 +406,1171 @@ export default function GroceryPage() {
       } = await supabase.auth.getUser();
 
       if (userError || !user) {
-        setErrorMessage(
-          isFr
-            ? "Veuillez vous connecter avant de passer une commande."
-            : "Please log in before placing an order."
-        );
-
+        router.push("/login");
         return;
       }
 
-      const countryName = selectedCountry
-        ? getCountryName(
-            selectedCountry,
-            isFr ? "fr" : "en"
-          )
-        : country;
+      const { data, error } = await supabase
+        .from("beneficiaries")
+        .select(
+          `
+            id,
+            name,
+            phone,
+            country,
+            country_code,
+            relationship,
+            provider
+          `
+        )
+        .eq("user_id", user.id)
+        .order("created_at", {
+          ascending: false,
+        });
 
-      const orderItems = buildOrderItemsText();
-
-const { data: createdOrder, error } = await supabase
-  .from("grocery_orders")
-  .insert([
-    {
-      user_id: user.id,
-      recipient_name: recipientName.trim(),
-      phone_number: phone.trim(),
-      country: countryName,
-      city: city.trim(),
-      delivery_type: deliveryType,
-      grocery_items: orderItems,
-      status: "Pending",
-    },
-  ])
-  .select("id")
-  .single();
-
-if (error) {
-  throw error;
-}
-
-if (!createdOrder) {
-  throw new Error(
-    "The grocery order was created without returning an order ID."
-  );
-}
-
-const structuredItems = cartDetails.map((item) => ({
-  order_id: createdOrder.id,
-  product_name:
-    item.product.name[isFr ? "fr" : "en"],
-  product_unit: item.product.unit,
-  quantity: item.quantity,
-  unit_price: item.product.price,
-  currency: item.product.currency,
-}));
-
-if (structuredItems.length > 0) {
-  const { error: itemsError } = await supabase
-    .from("grocery_order_items")
-    .insert(structuredItems);
-
-  if (itemsError) {
-    throw itemsError;
-  }
-}
-      try {
-        const emailResponse = await fetch(
-          "/api/send-order-email",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type":
-                "application/json",
-            },
-            body: JSON.stringify({
-              customerEmail: user.email,
-              customerName:
-                recipientName.trim(),
-              country: countryName,
-              city: city.trim(),
-              deliveryType,
-              items: orderItems,
-              subtotal: cartSubtotal,
-              currency:
-                selectedCountry?.currency ??
-                "XAF",
-            }),
-          }
-        );
-
-        if (!emailResponse.ok) {
-          console.error(
-            "The order was saved, but the email API returned an error."
-          );
-        }
-      } catch (emailError) {
-        console.error(
-          "Order saved, but confirmation email failed:",
-          emailError
-        );
+      if (error) {
+        throw error;
       }
 
-      setMessage(
-        isFr
-          ? "Commande enregistrée avec succès."
-          : "Grocery order submitted successfully."
-      );
+      const loadedBeneficiaries =
+        (data as Beneficiary[]) ?? [];
 
-      setTimeout(() => {
-        router.push("/my-orders");
-      }, 800);
+      setBeneficiaries(loadedBeneficiaries);
+
+      if (loadedBeneficiaries.length > 0) {
+        setSelectedBeneficiaryId(
+          loadedBeneficiaries[0].id
+        );
+      }
     } catch (error) {
       console.error(
-        "Grocery order error:",
+        "Unable to initialize grocery page:",
         error
       );
 
       setErrorMessage(
         isFr
-          ? "Impossible d'enregistrer la commande. Veuillez réessayer."
-          : "Unable to submit the order. Please try again."
+          ? "Impossible de charger le service d'épicerie."
+          : "Unable to load the grocery service."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // ============================================================
+  // LOAD MERCHANTS FOR BENEFICIARY COUNTRY
+  // ============================================================
+
+  async function loadMerchantsForBeneficiary(
+    beneficiary: Beneficiary
+  ) {
+    try {
+      setLoadingMerchants(true);
+      setErrorMessage("");
+      setSuccessMessage("");
+
+      setSelectedMerchantId("");
+      setProducts([]);
+      setCart({});
+      setWallet(null);
+
+      const countryCode = normalizeCountryCode(
+        beneficiary.country_code
+      );
+
+      if (!countryCode) {
+        setMerchants([]);
+
+        setErrorMessage(
+          isFr
+            ? "Ce bénéficiaire n'a pas de code pays. Modifiez le bénéficiaire avant de continuer."
+            : "This beneficiary does not have a country code. Update the beneficiary before continuing."
+        );
+
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("merchants")
+        .select(
+          `
+            id,
+            name,
+            merchant_type,
+            country,
+            country_code,
+            currency,
+            city,
+            address,
+            phone,
+            is_active
+          `
+        )
+        .eq("is_active", true)
+        .ilike("merchant_type", "grocery")
+        .eq("country_code", countryCode)
+        .order("name", {
+          ascending: true,
+        });
+
+      if (error) {
+        throw error;
+      }
+
+      const loadedMerchants =
+        (data as Merchant[]) ?? [];
+
+      setMerchants(loadedMerchants);
+
+      if (loadedMerchants.length === 1) {
+        setSelectedMerchantId(loadedMerchants[0].id);
+      }
+    } catch (error) {
+      console.error(
+        "Unable to load grocery merchants:",
+        error
+      );
+
+      setMerchants([]);
+
+      setErrorMessage(
+        isFr
+          ? "Impossible de charger les magasins disponibles."
+          : "Unable to load available grocery merchants."
+      );
+    } finally {
+      setLoadingMerchants(false);
+    }
+  }
+
+  // ============================================================
+  // LOAD PRODUCTS
+  // ============================================================
+
+  async function loadProducts(merchant: Merchant) {
+    try {
+      setLoadingProducts(true);
+      setErrorMessage("");
+      setCart({});
+
+      const { data, error } = await supabase
+        .from("grocery_products")
+        .select(
+          `
+            id,
+            merchant_id,
+            name,
+            category,
+            unit,
+            price,
+            currency,
+            stock,
+            is_active
+          `
+        )
+        .eq("merchant_id", merchant.id)
+        .eq("is_active", true)
+        .gt("stock", 0)
+        .order("category", {
+          ascending: true,
+        })
+        .order("name", {
+          ascending: true,
+        });
+
+      if (error) {
+        throw error;
+      }
+
+      const loadedProducts =
+        ((data ?? []) as GroceryProduct[]).map(
+          (product) => ({
+            ...product,
+            price: Number(product.price),
+            stock: Number(product.stock),
+            currency: normalizeCurrency(product.currency),
+          })
+        );
+
+      setProducts(loadedProducts);
+    } catch (error) {
+      console.error(
+        "Unable to load grocery products:",
+        error
+      );
+
+      setProducts([]);
+
+      setErrorMessage(
+        isFr
+          ? "Impossible de charger les produits de ce magasin."
+          : "Unable to load products for this merchant."
+      );
+    } finally {
+      setLoadingProducts(false);
+    }
+  }
+
+  // ============================================================
+  // LOAD MATCHING WALLET
+  // ============================================================
+
+  async function loadWallet(currency?: string | null) {
+    try {
+      setWallet(null);
+
+      const normalizedCurrency =
+        normalizeCurrency(currency);
+
+      if (!normalizedCurrency) {
+        return;
+      }
+
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError || !user) {
+        router.push("/login");
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("wallet_balances")
+        .select("id, currency, balance")
+        .eq("user_id", user.id)
+        .eq("currency", normalizedCurrency)
+        .maybeSingle();
+
+      if (error) {
+        throw error;
+      }
+
+      if (!data) {
+        setWallet(null);
+        return;
+      }
+
+      setWallet({
+        id: data.id,
+        currency: normalizeCurrency(data.currency),
+        balance: Number(data.balance ?? 0),
+      });
+    } catch (error) {
+      console.error("Unable to load wallet:", error);
+
+      setWallet(null);
+
+      setErrorMessage(
+        isFr
+          ? "Impossible de charger le portefeuille correspondant."
+          : "Unable to load the matching wallet."
+      );
+    }
+  }
+
+  // ============================================================
+  // CART
+  // ============================================================
+
+  function updateQuantity(
+    product: GroceryProduct,
+    quantity: number
+  ) {
+    const safeQuantity = Math.max(
+      0,
+      Math.min(quantity, Number(product.stock))
+    );
+
+    setCart((current) => {
+      const next = { ...current };
+
+      if (safeQuantity <= 0) {
+        delete next[product.id];
+      } else {
+        next[product.id] = safeQuantity;
+      }
+
+      return next;
+    });
+  }
+
+  function addToCart(product: GroceryProduct) {
+    const currentQuantity = cart[product.id] ?? 0;
+
+    if (currentQuantity >= product.stock) {
+      return;
+    }
+
+    updateQuantity(product, currentQuantity + 1);
+  }
+
+  function removeFromCart(product: GroceryProduct) {
+    const currentQuantity = cart[product.id] ?? 0;
+
+    updateQuantity(product, currentQuantity - 1);
+  }
+
+  // ============================================================
+  // REFRESH AFTER PURCHASE
+  // ============================================================
+
+  async function refreshAfterPurchase(
+    merchant: Merchant
+  ) {
+    await Promise.all([
+      loadProducts(merchant),
+      loadWallet(merchant.currency),
+    ]);
+  }
+
+  // ============================================================
+  // PURCHASE
+  // ============================================================
+
+  async function handlePurchase() {
+    if (
+      !selectedBeneficiary ||
+      !selectedMerchant ||
+      cartItems.length === 0
+    ) {
+      return;
+    }
+
+    if (!wallet) {
+      setErrorMessage(
+        isFr
+          ? `Vous n'avez pas de portefeuille ${normalizeCurrency(
+              selectedMerchant.currency
+            )}.`
+          : `You do not have a ${normalizeCurrency(
+              selectedMerchant.currency
+            )} wallet.`
+      );
+
+      return;
+    }
+
+    if (!hasEnoughBalance) {
+      setErrorMessage(
+        isFr
+          ? "Solde insuffisant pour cette commande."
+          : "Insufficient balance for this order."
+      );
+
+      return;
+    }
+
+    const confirmationLines = [
+      isFr
+        ? "Confirmer l'achat d'épicerie ?"
+        : "Confirm grocery purchase?",
+      "",
+      `${isFr ? "Bénéficiaire" : "Beneficiary"}: ${
+        selectedBeneficiary.name
+      }`,
+      `${isFr ? "Magasin" : "Merchant"}: ${
+        selectedMerchant.name
+      }`,
+      `${isFr ? "Mode de réception" : "Fulfillment"}: ${
+        deliveryType === "Delivery"
+          ? isFr
+            ? "Livraison"
+            : "Delivery"
+          : isFr
+          ? "Retrait"
+          : "Pickup"
+      }`,
+      "",
+      ...cartItems.map(
+        (item) =>
+          `${getProductName(item.name, language)} × ${
+            item.quantity
+          } — ${formatMoney(
+            item.price * item.quantity,
+            item.currency,
+            language
+          )}`
+      ),
+      "",
+      `${isFr ? "Sous-total" : "Subtotal"}: ${formatMoney(
+        subtotal,
+        selectedMerchant.currency ?? "",
+        language
+      )}`,
+      `${isFr ? "Total" : "Total"}: ${formatMoney(
+        total,
+        selectedMerchant.currency ?? "",
+        language
+      )}`,
+      `${
+        isFr ? "Solde après achat" : "Balance after purchase"
+      }: ${formatMoney(
+        balanceAfter,
+        selectedMerchant.currency ?? "",
+        language
+      )}`,
+    ];
+
+    const confirmed = window.confirm(
+      confirmationLines.join("\n")
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setSubmitting(true);
+      setErrorMessage("");
+      setSuccessMessage("");
+
+      const idempotencyKey =
+        createIdempotencyKey();
+
+      // SECURITY:
+      // Only product IDs and quantities are sent.
+      // Price, currency and stock are validated by PostgreSQL.
+      const rpcItems = cartItems.map((item) => ({
+        product_id: item.id,
+        quantity: item.quantity,
+      }));
+
+      const { data, error } = await supabase.rpc(
+        "ndakocare_create_grocery_order_v2",
+        {
+          p_beneficiary_id: selectedBeneficiary.id,
+          p_merchant_id: selectedMerchant.id,
+          p_items: rpcItems,
+          p_delivery_type: deliveryType,
+          p_idempotency_key: idempotencyKey,
+        }
+      );
+
+      if (error) {
+        throw error;
+      }
+
+      const result = data as GroceryRpcResult;
+
+      if (!result?.success) {
+        throw new Error(
+          isFr
+            ? "La commande n'a pas été créée."
+            : "The grocery order was not created."
+        );
+      }
+
+      setCart({});
+
+      setSuccessMessage(
+        isFr
+          ? `Commande créée avec succès. ${formatMoney(
+              Number(result.total),
+              result.currency,
+              language
+            )}. Référence : ${result.reference}`
+          : `Order submitted successfully. ${formatMoney(
+              Number(result.total),
+              result.currency,
+              language
+            )}. Reference: ${result.reference}`
+      );
+
+      await refreshAfterPurchase(selectedMerchant);
+    } catch (error) {
+      console.error(
+        "Grocery checkout failed:",
+        error
+      );
+
+      const message =
+        error instanceof Error
+          ? error.message
+          : String(error);
+
+      setErrorMessage(
+        isFr
+          ? `Impossible de créer la commande. ${message}`
+          : `Unable to create the grocery order. ${message}`
       );
     } finally {
       setSubmitting(false);
     }
-  };
+  }
+
+  // ============================================================
+  // LOADING
+  // ============================================================
+
+  if (loading) {
+    return (
+      <>
+        <Navbar />
+
+        <main className="mx-auto max-w-6xl p-6">
+          <p>
+            {isFr
+              ? "Chargement de l'épicerie..."
+              : "Loading grocery service..."}
+          </p>
+        </main>
+      </>
+    );
+  }
+
+  // ============================================================
+  // PAGE
+  // ============================================================
 
   return (
     <>
       <Navbar />
 
-      <main className="min-h-screen bg-gray-100 px-4 py-8 md:px-8">
-        <div className="mx-auto max-w-6xl">
-          {/* Page Header */}
+      <main className="mx-auto max-w-6xl p-6">
+        {/* Back */}
+        <div className="mb-6">
+          <Link
+            href="/dashboard"
+            className="text-sm font-medium text-green-700 hover:underline"
+          >
+            ← {isFr ? "Retour" : "Back"}
+          </Link>
+        </div>
 
-          <div className="mb-8">
-            <p className="mb-2 font-semibold text-green-700">
-              {isFr
-                ? "Services familiaux"
-                : "Family Services"}
-            </p>
+        {/* Header */}
+        <div className="mb-8">
+          <p className="mb-2 text-sm font-semibold uppercase tracking-wide text-green-700">
+            NdakoCare • {isFr ? "Épicerie" : "Grocery"}
+          </p>
 
-            <h1 className="text-4xl font-bold text-gray-900 md:text-5xl">
-              {isFr
-                ? "Commande de courses"
-                : "Grocery Order"}
-            </h1>
+          <h1 className="text-3xl font-bold">
+            {isFr ? "Épicerie" : "Grocery"}
+          </h1>
 
-            <p className="mt-3 max-w-3xl text-lg text-gray-600">
+          <p className="mt-2 text-gray-600">
+            {isFr
+              ? "Achetez des produits auprès d'un magasin disponible dans le pays de votre bénéficiaire en utilisant le portefeuille local correspondant."
+              : "Purchase groceries from an available merchant in your beneficiary's country using the matching local-currency wallet."}
+          </p>
+        </div>
+
+        {/* Success */}
+        {successMessage && (
+          <div className="mb-6 rounded-xl border border-green-300 bg-green-50 p-4 font-medium text-green-800">
+            {successMessage}
+          </div>
+        )}
+
+        {/* Error */}
+        {errorMessage && (
+          <div className="mb-6 rounded-xl border border-red-300 bg-red-50 p-4 text-red-800">
+            {errorMessage}
+          </div>
+        )}
+
+        {/* ====================================================
+            BENEFICIARY
+        ==================================================== */}
+
+        <section className="mb-6 rounded-2xl border bg-white p-6 shadow-sm">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+            <label className="font-semibold">
+              {isFr ? "Bénéficiaire" : "Beneficiary"}
+            </label>
+
+            <Link
+              href="/beneficiaries"
+              className="font-semibold text-green-700 hover:underline"
+            >
+              +{" "}
               {isFr
-                ? "Commandez des produits essentiels pour votre famille et vos proches."
-                : "Order essential groceries for your family and loved ones."}
-            </p>
+                ? "Ajouter un bénéficiaire"
+                : "Add New Beneficiary"}
+            </Link>
           </div>
 
-          <form
-            onSubmit={handleSubmit}
-            className="overflow-hidden rounded-3xl bg-white shadow-lg"
+          <select
+            value={selectedBeneficiaryId}
+            onChange={(event) =>
+              setSelectedBeneficiaryId(event.target.value)
+            }
+            className="w-full rounded-lg border p-3"
           >
-            {/* Recipient Information */}
+            <option value="">
+              {isFr
+                ? "Sélectionner un bénéficiaire"
+                : "Select Beneficiary"}
+            </option>
 
-            <section className="border-b border-gray-200 p-6 md:p-8">
-              <div className="mb-6">
-                <h2 className="text-2xl font-bold text-gray-900">
-                  {isFr
-                    ? "Informations du bénéficiaire"
-                    : "Recipient Information"}
-                </h2>
+            {beneficiaries.map((beneficiary) => (
+              <option
+                key={beneficiary.id}
+                value={beneficiary.id}
+              >
+                {beneficiary.name}
+                {beneficiary.country_code
+                  ? ` — ${beneficiary.country_code}`
+                  : ""}
+              </option>
+            ))}
+          </select>
 
-                <p className="mt-1 text-gray-500">
-                  {isFr
-                    ? "Indiquez les informations de la personne qui recevra la commande."
-                    : "Enter the information for the person receiving the order."}
+          <p className="mt-2 text-sm text-gray-500">
+            {beneficiaries.length}{" "}
+            {isFr
+              ? "bénéficiaire(s) enregistré(s)"
+              : "saved beneficiaries"}
+          </p>
+
+          {selectedBeneficiary && (
+            <div className="mt-5 grid gap-4 sm:grid-cols-3">
+              <div>
+                <p className="text-sm text-gray-500">
+                  {isFr ? "Pays" : "Country"}
+                </p>
+
+                <p className="font-semibold">
+                  {selectedBeneficiary.country}
                 </p>
               </div>
 
-              <div className="grid gap-5 md:grid-cols-2">
-                <div>
-                  <label className="mb-2 block font-semibold text-gray-700">
-                    {isFr
-                      ? "Nom complet"
-                      : "Full Name"}{" "}
-                    *
-                  </label>
+              <div>
+                <p className="text-sm text-gray-500">
+                  {isFr ? "Code pays" : "Country code"}
+                </p>
 
-                  <input
-                    type="text"
-                    value={recipientName}
-                    onChange={(event) =>
-                      setRecipientName(
-                        event.target.value
-                      )
-                    }
-                    placeholder={
-                      isFr
-                        ? "Nom du bénéficiaire"
-                        : "Recipient name"
-                    }
-                    required
-                    className="w-full rounded-xl border border-gray-300 px-4 py-3 outline-none transition focus:border-green-600 focus:ring-2 focus:ring-green-100"
-                  />
+                <p className="font-semibold">
+                  {selectedBeneficiary.country_code ?? "—"}
+                </p>
+              </div>
+
+              <div>
+                <p className="text-sm text-gray-500">
+                  {isFr ? "Téléphone" : "Phone"}
+                </p>
+
+                <p className="font-semibold">
+                  {selectedBeneficiary.phone}
+                </p>
+              </div>
+            </div>
+          )}
+        </section>
+
+        {/* ====================================================
+            MERCHANT
+        ==================================================== */}
+
+        {selectedBeneficiary && (
+          <section className="mb-6 rounded-2xl border bg-white p-6 shadow-sm">
+            <label className="mb-2 block font-semibold">
+              {isFr ? "Magasin" : "Grocery Merchant"}
+            </label>
+
+            <select
+              value={selectedMerchantId}
+              onChange={(event) =>
+                setSelectedMerchantId(event.target.value)
+              }
+              disabled={loadingMerchants}
+              className="w-full rounded-lg border p-3 disabled:bg-gray-100"
+            >
+              <option value="">
+                {loadingMerchants
+                  ? isFr
+                    ? "Chargement..."
+                    : "Loading..."
+                  : isFr
+                  ? "Sélectionner un magasin"
+                  : "Select Grocery Merchant"}
+              </option>
+
+              {merchants.map((merchant) => (
+                <option
+                  key={merchant.id}
+                  value={merchant.id}
+                >
+                  {merchant.name}
+                  {merchant.city
+                    ? ` — ${merchant.city}`
+                    : ""}
+                  {merchant.currency
+                    ? ` — ${merchant.currency}`
+                    : ""}
+                </option>
+              ))}
+            </select>
+
+            {!loadingMerchants &&
+              merchants.length === 0 && (
+                <p className="mt-3 text-sm text-amber-700">
+                  {isFr
+                    ? `Aucun magasin NdakoCare actif n'est disponible pour ${selectedBeneficiary.country_code}.`
+                    : `No active NdakoCare grocery merchant is currently available for ${selectedBeneficiary.country_code}.`}
+                </p>
+              )}
+
+            {selectedMerchant && (
+              <div className="mt-5 grid gap-4 sm:grid-cols-4">
+                <div>
+                  <p className="text-sm text-gray-500">
+                    {isFr ? "Magasin" : "Merchant"}
+                  </p>
+
+                  <p className="font-semibold">
+                    {selectedMerchant.name}
+                  </p>
                 </div>
 
                 <div>
-                  <label className="mb-2 block font-semibold text-gray-700">
-                    {isFr
-                      ? "Numéro de téléphone"
-                      : "Phone Number"}{" "}
-                    *
-                  </label>
+                  <p className="text-sm text-gray-500">
+                    {isFr ? "Ville" : "City"}
+                  </p>
 
-                  <input
-                    type="tel"
-                    value={phone}
-                    onChange={(event) =>
-                      setPhone(event.target.value)
-                    }
-                    placeholder={
-                      selectedCountry
-                        ? `${selectedCountry.phoneCode} ...`
-                        : "+..."
-                    }
-                    required
-                    className="w-full rounded-xl border border-gray-300 px-4 py-3 outline-none transition focus:border-green-600 focus:ring-2 focus:ring-green-100"
-                  />
+                  <p className="font-semibold">
+                    {selectedMerchant.city ?? "—"}
+                  </p>
                 </div>
 
                 <div>
-                  <label className="mb-2 block font-semibold text-gray-700">
-                    {isFr ? "Pays" : "Country"} *
-                  </label>
+                  <p className="text-sm text-gray-500">
+                    {isFr ? "Devise" : "Currency"}
+                  </p>
 
-                  <select
-                    value={country}
-                    onChange={(event) => {
-                      setCountry(
-                        event.target.value
-                      );
-                      setCart([]);
-                      setSelectedCategory("all");
-                    }}
-                    required
-                    className="w-full rounded-xl border border-gray-300 bg-white px-4 py-3 outline-none transition focus:border-green-600 focus:ring-2 focus:ring-green-100"
-                  >
-                    {countries.map((item) => (
-                      <option
-                        key={item.code}
-                        value={item.code}
-                      >
-                        {item.flag}{" "}
-                        {getCountryName(
-                          item,
-                          isFr ? "fr" : "en"
-                        )}{" "}
-                        ({item.phoneCode})
-                      </option>
-                    ))}
-                  </select>
+                  <p className="font-semibold">
+                    {selectedMerchant.currency ?? "—"}
+                  </p>
                 </div>
 
                 <div>
-                  <label className="mb-2 block font-semibold text-gray-700">
-                    {isFr ? "Ville" : "City"} *
-                  </label>
+                  <p className="text-sm text-gray-500">
+                    {isFr ? "Pays" : "Country"}
+                  </p>
 
-                  <input
-                    type="text"
-                    value={city}
-                    onChange={(event) =>
-                      setCity(event.target.value)
-                    }
-                    placeholder={
-                      isFr
-                        ? "Ville de livraison ou retrait"
-                        : "Delivery or pickup city"
-                    }
-                    required
-                    className="w-full rounded-xl border border-gray-300 px-4 py-3 outline-none transition focus:border-green-600 focus:ring-2 focus:ring-green-100"
-                  />
+                  <p className="font-semibold">
+                    {selectedMerchant.country ?? "—"}
+                  </p>
                 </div>
               </div>
+            )}
+          </section>
+        )}
+
+        {selectedMerchant && (
+          <>
+            {/* ==================================================
+                WALLET
+            ================================================== */}
+
+            <section className="mb-6 rounded-2xl border bg-white p-6 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm font-semibold text-gray-600">
+                    {normalizeCurrency(
+                      selectedMerchant.currency
+                    )}{" "}
+                    {isFr
+                      ? "Portefeuille"
+                      : "Wallet"}
+                  </p>
+
+                  <h2 className="mt-1 text-3xl font-bold text-green-700">
+                    {wallet
+                      ? formatMoney(
+                          balance,
+                          wallet.currency,
+                          language
+                        )
+                      : "—"}
+                  </h2>
+                </div>
+
+                <Link
+                  href="/wallet"
+                  className="rounded-lg border border-green-700 px-4 py-2 font-semibold text-green-700"
+                >
+                  {isFr
+                    ? "Voir le portefeuille"
+                    : "View Wallet"}
+                </Link>
+              </div>
+
+              {!wallet && (
+                <p className="mt-4 text-sm text-amber-700">
+                  {isFr
+                    ? `Aucun portefeuille ${normalizeCurrency(
+                        selectedMerchant.currency
+                      )} trouvé.`
+                    : `No ${normalizeCurrency(
+                        selectedMerchant.currency
+                      )} wallet was found.`}
+                </p>
+              )}
             </section>
 
-            {/* Fulfillment Method */}
+            {/* ==================================================
+                PRODUCTS
+            ================================================== */}
 
-            <section className="border-b border-gray-200 p-6 md:p-8">
-              <h2 className="mb-5 text-2xl font-bold text-gray-900">
+            <section className="mb-6 rounded-2xl border bg-white p-6 shadow-sm">
+              <h2 className="mb-5 text-xl font-bold">
                 {isFr
-                  ? "Mode de réception"
-                  : "Fulfillment Method"}
+                  ? "Produits disponibles"
+                  : "Available Products"}
               </h2>
 
-              <div className="grid gap-4 md:grid-cols-2">
-                <label
-                  className={`cursor-pointer rounded-2xl border-2 p-5 transition ${
-                    deliveryType === "Pickup"
-                      ? "border-green-600 bg-green-50"
-                      : "border-gray-200 hover:border-green-300"
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="deliveryType"
-                    value="Pickup"
-                    checked={
-                      deliveryType === "Pickup"
-                    }
-                    onChange={(event) =>
-                      setDeliveryType(
-                        event.target.value
-                      )
-                    }
-                    className="mr-3"
-                  />
-
-                  <span className="font-bold">
-                    {isFr ? "Retrait" : "Pickup"}
-                  </span>
-
-                  <p className="mt-2 text-sm text-gray-500">
-                    {isFr
-                      ? "Le bénéficiaire récupère la commande au point de retrait."
-                      : "The recipient collects the order from the pickup location."}
-                  </p>
-                </label>
-
-                <label
-                  className={`cursor-pointer rounded-2xl border-2 p-5 transition ${
-                    deliveryType === "Delivery"
-                      ? "border-green-600 bg-green-50"
-                      : "border-gray-200 hover:border-green-300"
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="deliveryType"
-                    value="Delivery"
-                    checked={
-                      deliveryType === "Delivery"
-                    }
-                    onChange={(event) =>
-                      setDeliveryType(
-                        event.target.value
-                      )
-                    }
-                    className="mr-3"
-                  />
-
-                  <span className="font-bold">
-                    {isFr
-                      ? "Livraison"
-                      : "Delivery"}
-                  </span>
-
-                  <p className="mt-2 text-sm text-gray-500">
-                    {isFr
-                      ? "La commande sera livrée au bénéficiaire."
-                      : "The order will be delivered to the recipient."}
-                  </p>
-                </label>
-              </div>
-            </section>
-
-            {/* Product Catalog */}
-
-            <section className="border-b border-gray-200 p-6 md:p-8">
-              <div className="mb-6">
-                <p className="mb-2 text-sm font-semibold uppercase tracking-wide text-green-700">
+              {loadingProducts ? (
+                <p>
                   {isFr
-                    ? "Marché NdakoCare"
-                    : "NdakoCare Market"}
+                    ? "Chargement des produits..."
+                    : "Loading products..."}
                 </p>
-
-                <div className="flex flex-col justify-between gap-3 md:flex-row md:items-end">
-                  <div>
-                    <h2 className="text-2xl font-bold text-gray-900">
-                      {isFr
-                        ? "Choisissez vos produits"
-                        : "Choose Your Products"}
-                    </h2>
-
-                    <p className="mt-2 text-gray-500">
-                      {isFr
-                        ? "Parcourez les produits actuellement disponibles pour cette destination."
-                        : "Browse products currently available for this destination."}
-                    </p>
-                  </div>
-
-                  <div className="rounded-full bg-green-50 px-4 py-2 text-sm font-bold text-green-700">
-                    {cartItemCount}{" "}
-                    {isFr
-                      ? cartItemCount > 1
-                        ? "articles"
-                        : "article"
-                      : cartItemCount === 1
-                      ? "item"
-                      : "items"}
-                  </div>
-                </div>
-              </div>
-
-              {/* Categories */}
-
-              <div className="mb-7 flex flex-wrap gap-3">
-                {GROCERY_CATEGORIES.map(
-                  (category) => {
-                    const active =
-                      selectedCategory ===
-                      category.id;
-
-                    return (
-                      <button
-                        key={category.id}
-                        type="button"
-                        onClick={() =>
-                          setSelectedCategory(
-                            category.id
-                          )
-                        }
-                        className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
-                          active
-                            ? "bg-green-700 text-white"
-                            : "border border-gray-300 bg-white text-gray-700 hover:border-green-600 hover:text-green-700"
-                        }`}
-                      >
-                        {isFr
-                          ? category.fr
-                          : category.en}
-                      </button>
-                    );
-                  }
-                )}
-              </div>
-
-              {/* Product Grid */}
-
-              {groceryProducts.length > 0 ? (
-                <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-                  {groceryProducts.map(
-                    (product) => {
-                      const quantity =
-                        getQuantity(product.id);
-
-                      return (
-                        <article
-                          key={product.id}
-                          className={`flex flex-col rounded-2xl border bg-white p-5 transition hover:-translate-y-1 hover:shadow-lg ${
-                            quantity > 0
-                              ? "border-green-500 ring-2 ring-green-100"
-                              : "border-gray-200 hover:border-green-300"
-                          }`}
-                        >
-                          <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-green-50 text-4xl">
-                            {product.emoji}
-                          </div>
-
-                          <div className="flex-1">
-                            <h3 className="text-lg font-bold text-gray-900">
-                              {isFr
-                                ? product.name.fr
-                                : product.name.en}
-                            </h3>
-
-                            <p className="mt-1 text-sm text-gray-500">
-                              {isFr
-                                ? product
-                                    .description.fr
-                                : product
-                                    .description.en}
-                            </p>
-
-                            <p className="mt-2 text-xs font-medium uppercase tracking-wide text-gray-400">
-                              {product.unit}
-                            </p>
-                          </div>
-
-                          <div className="mt-5 flex items-end justify-between gap-3">
-                            <div>
-                              <p className="text-xs text-gray-500">
-                                {isFr
-                                  ? "Prix"
-                                  : "Price"}
-                              </p>
-
-                              <p className="text-lg font-extrabold text-green-700">
-                                {formatPrice(
-                                  product.price,
-                                  product.currency
-                                )}
-                              </p>
-                            </div>
-
-                            {quantity > 0 ? (
-                              <div className="flex items-center gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    decreaseQuantity(
-                                      product.id
-                                    )
-                                  }
-                                  aria-label={
-                                    isFr
-                                      ? `Réduire la quantité de ${
-                                          product
-                                            .name.fr
-                                        }`
-                                      : `Decrease ${
-                                          product
-                                            .name.en
-                                        } quantity`
-                                  }
-                                  className="flex h-9 w-9 items-center justify-center rounded-lg border border-green-700 font-bold text-green-700 transition hover:bg-green-50"
-                                >
-                                  −
-                                </button>
-
-                                <span className="min-w-6 text-center font-bold text-gray-900">
-                                  {quantity}
-                                </span>
-
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    increaseQuantity(
-                                      product.id
-                                    )
-                                  }
-                                  aria-label={
-                                    isFr
-                                      ? `Augmenter la quantité de ${
-                                          product
-                                            .name.fr
-                                        }`
-                                      : `Increase ${
-                                          product
-                                            .name.en
-                                        } quantity`
-                                  }
-                                  className="flex h-9 w-9 items-center justify-center rounded-lg bg-green-700 font-bold text-white transition hover:bg-green-800"
-                                >
-                                  +
-                                </button>
-                              </div>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  increaseQuantity(
-                                    product.id
-                                  )
-                                }
-                                className="rounded-xl bg-green-700 px-4 py-2 font-semibold text-white transition hover:bg-green-800"
-                              >
-                                +{" "}
-                                {isFr
-                                  ? "Ajouter"
-                                  : "Add"}
-                              </button>
-                            )}
-                          </div>
-                        </article>
-                      );
-                    }
-                  )}
-                </div>
+              ) : products.length === 0 ? (
+                <p className="text-gray-600">
+                  {isFr
+                    ? "Aucun produit disponible actuellement."
+                    : "No products are currently available."}
+                </p>
               ) : (
-                <div className="rounded-2xl border border-dashed border-gray-300 bg-gray-50 p-8 text-center">
-                  <div className="mb-3 text-4xl">
-                    🛒
-                  </div>
+                <div className="space-y-8">
+                  {categories.map((category) => (
+                    <div key={category}>
+                      <h3 className="mb-3 text-lg font-bold">
+                        {getCategoryName(
+                          category,
+                          language
+                        )}
+                      </h3>
 
-                  <h3 className="font-bold text-gray-900">
-                    {isFr
-                      ? "Aucun produit disponible"
-                      : "No products available"}
-                  </h3>
+                      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                        {products
+                          .filter(
+                            (product) =>
+                              product.category ===
+                              category
+                          )
+                          .map((product) => {
+                            const quantity =
+                              cart[product.id] ?? 0;
 
-                  <p className="mt-2 text-sm text-gray-500">
-                    {isFr
-                      ? "Le catalogue pour cette destination sera bientôt disponible."
-                      : "The catalog for this destination will be available soon."}
-                  </p>
+                            return (
+                              <div
+                                key={product.id}
+                                className="rounded-xl border p-4"
+                              >
+                                <h4 className="font-bold">
+                                  {getProductName(
+                                    product.name,
+                                    language
+                                  )}
+                                </h4>
+
+                                <p className="mt-1 text-sm text-gray-500">
+                                  {getUnitName(
+                                    product.unit,
+                                    language
+                                  )}
+                                </p>
+
+                                <p className="mt-3 text-xl font-bold text-green-700">
+                                  {formatMoney(
+                                    product.price,
+                                    product.currency,
+                                    language
+                                  )}
+                                </p>
+
+                                <p className="mt-1 text-sm text-gray-500">
+                                  {product.stock}{" "}
+                                  {isFr
+                                    ? "disponible(s)"
+                                    : "available"}
+                                </p>
+
+                                <div className="mt-4 flex items-center gap-3">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      removeFromCart(
+                                        product
+                                      )
+                                    }
+                                    disabled={
+                                      quantity === 0
+                                    }
+                                    className="h-9 w-9 rounded-lg border font-bold disabled:opacity-40"
+                                  >
+                                    −
+                                  </button>
+
+                                  <span className="min-w-8 text-center font-bold">
+                                    {quantity}
+                                  </span>
+
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      addToCart(product)
+                                    }
+                                    disabled={
+                                      quantity >=
+                                      product.stock
+                                    }
+                                    className="h-9 w-9 rounded-lg border font-bold disabled:opacity-40"
+                                  >
+                                    +
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </section>
 
-            {/* Cart and Order Summary */}
+            {/* ==================================================
+                DELIVERY / PICKUP
+            ================================================== */}
 
-            <section className="p-6 md:p-8">
-              <div className="grid gap-8 lg:grid-cols-3">
-                <div className="lg:col-span-2">
-                  <h2 className="text-2xl font-bold text-gray-900">
-                    {isFr
-                      ? "Résumé de la commande"
-                      : "Order Summary"}
-                  </h2>
+            <section className="mb-6 rounded-2xl border bg-white p-6 shadow-sm">
+              <label className="mb-2 block font-semibold">
+                {isFr
+                  ? "Mode de réception"
+                  : "Fulfillment Method"}
+              </label>
 
-                  <p className="mb-5 mt-1 text-gray-500">
-                    {isFr
-                      ? "Vérifiez les produits et les quantités avant d'envoyer la commande."
-                      : "Review the selected products and quantities before submitting the order."}
-                  </p>
+              <select
+                value={deliveryType}
+                onChange={(event) =>
+                  setDeliveryType(event.target.value)
+                }
+                className="w-full rounded-lg border p-3"
+              >
+                <option value="Delivery">
+                  {isFr ? "Livraison" : "Delivery"}
+                </option>
 
-                  {cartDetails.length > 0 ? (
-                    <div className="space-y-3">
-                      {cartDetails.map(
-                        ({
-                          product,
-                          quantity,
-                          lineTotal,
-                        }) => (
-                          <div
-                            key={product.id}
-                            className="flex flex-col justify-between gap-4 rounded-2xl border border-gray-200 p-4 sm:flex-row sm:items-center"
-                          >
-                            <div className="flex items-center gap-4">
-                              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-green-50 text-2xl">
-                                {product.emoji}
-                              </div>
+                <option value="Pickup">
+                  {isFr ? "Retrait" : "Pickup"}
+                </option>
+              </select>
+            </section>
 
-                              <div>
-                                <h3 className="font-bold text-gray-900">
-                                  {isFr
-                                    ? product.name.fr
-                                    : product.name.en}
-                                </h3>
+            {/* ==================================================
+                ORDER SUMMARY
+            ================================================== */}
 
-                                <p className="text-sm text-gray-500">
-                                  {product.unit} ×{" "}
-                                  {quantity}
-                                </p>
-                              </div>
-                            </div>
+            <section className="rounded-2xl border bg-white p-6 shadow-sm">
+              <h2 className="mb-5 text-xl font-bold">
+                {isFr
+                  ? "Résumé de la commande"
+                  : "Order Summary"}
+              </h2>
 
-                            <div className="flex items-center justify-between gap-4 sm:justify-end">
-                              <p className="font-bold text-green-700">
-                                {formatPrice(
-                                  lineTotal,
-                                  product.currency
-                                )}
-                              </p>
+              {cartItems.length === 0 ? (
+                <p className="text-gray-600">
+                  {isFr
+                    ? "Ajoutez des produits pour voir le résumé."
+                    : "Add products to see the order summary."}
+                </p>
+              ) : (
+                <>
+                  <div className="space-y-3">
+                    {cartItems.map((item) => (
+                      <div
+                        key={item.id}
+                        className="flex items-start justify-between gap-4 border-b pb-3"
+                      >
+                        <div>
+                          <p className="font-semibold">
+                            {getProductName(
+                              item.name,
+                              language
+                            )}
+                          </p>
 
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  removeFromCart(
-                                    product.id
-                                  )
-                                }
-                                className="rounded-lg px-3 py-2 text-sm font-semibold text-red-600 transition hover:bg-red-50"
-                              >
-                                {isFr
-                                  ? "Supprimer"
-                                  : "Remove"}
-                              </button>
-                            </div>
-                          </div>
-                        )
-                      )}
-                    </div>
-                  ) : (
-                    <div className="rounded-2xl border border-dashed border-gray-300 bg-gray-50 p-7 text-center text-gray-500">
-                      {isFr
-                        ? "Aucun produit sélectionné."
-                        : "No products selected."}
-                    </div>
-                  )}
+                          <p className="text-sm text-gray-500">
+                            {getUnitName(
+                              item.unit,
+                              language
+                            )}{" "}
+                            × {item.quantity}
+                          </p>
+                        </div>
 
-                  <div className="mt-6">
-                    <label className="mb-2 block font-semibold text-gray-700">
-                      {isFr
-                        ? "Demande supplémentaire"
-                        : "Additional Request"}
-                    </label>
-
-                    <textarea
-                      value={additionalItems}
-                      onChange={(event) =>
-                        setAdditionalItems(
-                          event.target.value
-                        )
-                      }
-                      rows={5}
-                      placeholder={
-                        isFr
-                          ? "Ajoutez ici un produit qui ne figure pas dans le catalogue."
-                          : "Enter any product that is not currently listed in the catalog."
-                      }
-                      className="w-full rounded-2xl border border-gray-300 px-4 py-4 outline-none transition focus:border-green-600 focus:ring-2 focus:ring-green-100"
-                    />
+                        <p className="font-semibold">
+                          {formatMoney(
+                            item.price *
+                              item.quantity,
+                            item.currency,
+                            language
+                          )}
+                        </p>
+                      </div>
+                    ))}
                   </div>
-                </div>
 
-                {/* Summary Sidebar */}
-
-                <aside className="h-fit rounded-2xl bg-gray-50 p-6">
-                  <h2 className="text-xl font-bold text-gray-900">
-                    {isFr
-                      ? "Total de la commande"
-                      : "Order Total"}
-                  </h2>
-
-                  <div className="mt-5 space-y-4">
-                    <div className="flex justify-between gap-4">
-                      <span className="text-gray-600">
-                        {isFr
-                          ? "Articles"
-                          : "Items"}
-                      </span>
-
-                      <span className="font-bold">
-                        {cartItemCount}
-                      </span>
-                    </div>
-
-                    <div className="flex justify-between gap-4">
-                      <span className="text-gray-600">
+                  <div className="mt-5 space-y-3">
+                    <div className="flex justify-between">
+                      <span>
                         {isFr
                           ? "Sous-total"
                           : "Subtotal"}
                       </span>
 
-                      <span className="font-bold">
-                        {formatPrice(
-                          cartSubtotal,
-                          selectedCountry?.currency ??
-                            "XAF"
+                      <strong>
+                        {formatMoney(
+                          subtotal,
+                          selectedMerchant.currency ??
+                            "",
+                          language
                         )}
-                      </span>
+                      </strong>
                     </div>
 
-                    <div className="border-t border-gray-300 pt-4">
-                      <p className="text-sm text-gray-500">
+                    <div className="flex justify-between">
+                      <span>
                         {isFr
-                          ? "Les frais de livraison et le prix final seront confirmés après vérification par le marchand."
-                          : "Delivery fees and the final price will be confirmed after merchant review."}
-                      </p>
+                          ? "Frais de livraison"
+                          : "Delivery fee"}
+                      </span>
+
+                      <strong>
+                        {formatMoney(
+                          deliveryFee,
+                          selectedMerchant.currency ??
+                            "",
+                          language
+                        )}
+                      </strong>
                     </div>
 
-                    {selectedCountry && (
-                      <div className="rounded-xl bg-white p-4">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
-                          Destination
-                        </p>
+                    <div className="flex justify-between border-t pt-4 text-xl">
+                      <strong>Total</strong>
 
-                        <p className="mt-2 font-bold text-gray-900">
-                          {selectedCountry.flag}{" "}
-                          {getCountryName(
-                            selectedCountry,
-                            isFr ? "fr" : "en"
-                          )}
-                        </p>
+                      <strong>
+                        {formatMoney(
+                          total,
+                          selectedMerchant.currency ??
+                            "",
+                          language
+                        )}
+                      </strong>
+                    </div>
 
-                        <p className="mt-1 text-sm text-gray-500">
+                    {wallet && (
+                      <div className="flex justify-between">
+                        <span>
                           {isFr
-                            ? "Devise"
-                            : "Currency"}
-                          :{" "}
-                          {
-                            selectedCountry.currency
+                            ? "Solde après achat"
+                            : "Balance after purchase"}
+                        </span>
+
+                        <strong
+                          className={
+                            balanceAfter >= 0
+                              ? "text-green-700"
+                              : "text-red-700"
                           }
-                        </p>
+                        >
+                          {formatMoney(
+                            balanceAfter,
+                            wallet.currency,
+                            language
+                          )}
+                        </strong>
                       </div>
                     )}
+
+                    {wallet &&
+                      total > 0 &&
+                      !hasEnoughBalance && (
+                        <div className="rounded-lg bg-red-50 p-3 font-semibold text-red-700">
+                          {isFr
+                            ? `Solde insuffisant. Il vous manque ${formatMoney(
+                                total - balance,
+                                wallet.currency,
+                                language
+                              )}.`
+                            : `Insufficient balance. You need ${formatMoney(
+                                total - balance,
+                                wallet.currency,
+                                language
+                              )} more.`}
+                        </div>
+                      )}
                   </div>
-                </aside>
-              </div>
-
-              {/* Messages */}
-
-              {errorMessage && (
-                <div className="mt-6 rounded-xl border border-red-200 bg-red-50 p-4 text-red-700">
-                  {errorMessage}
-                </div>
+                </>
               )}
 
-              {message && (
-                <div className="mt-6 rounded-xl border border-green-200 bg-green-50 p-4 text-green-700">
-                  {message}
-                </div>
-              )}
-
-              {/* Submit */}
-
+              {/* PURCHASE */}
               <button
-                type="submit"
-                disabled={submitting}
-                className="mt-6 w-full rounded-xl bg-green-700 px-6 py-4 text-lg font-bold text-white transition hover:bg-green-800 disabled:cursor-not-allowed disabled:opacity-60"
+                type="button"
+                onClick={handlePurchase}
+                disabled={
+                  submitting ||
+                  cartItems.length === 0 ||
+                  !wallet ||
+                  !hasEnoughBalance
+                }
+                className="mt-6 rounded-xl bg-green-700 px-6 py-3 font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {submitting
                   ? isFr
-                    ? "Envoi en cours..."
-                    : "Submitting..."
+                    ? "Traitement..."
+                    : "Processing..."
                   : isFr
-                  ? "Envoyer la commande"
-                  : "Submit Grocery Order"}
+                  ? "Acheter les produits"
+                  : "Buy Groceries"}
               </button>
+
+              {/* LINKS */}
+              <div className="mt-5 flex flex-wrap gap-3">
+                <Link
+                  href="/my-orders"
+                  className="rounded-lg border px-4 py-2 font-semibold"
+                >
+                  {isFr
+                    ? "Voir mes commandes"
+                    : "View My Orders"}
+                </Link>
+
+                <Link
+                  href="/activity"
+                  className="rounded-lg border px-4 py-2 font-semibold"
+                >
+                  {isFr
+                    ? "Voir l'activité financière"
+                    : "View Financial Activity"}
+                </Link>
+
+                <Link
+                  href="/wallet"
+                  className="rounded-lg border px-4 py-2 font-semibold"
+                >
+                  {isFr
+                    ? "Voir le portefeuille"
+                    : "View Wallet"}
+                </Link>
+
+                <Link
+                  href="/dashboard"
+                  className="rounded-lg border px-4 py-2 font-semibold"
+                >
+                  {isFr
+                    ? "Retour au tableau de bord"
+                    : "Back to Dashboard"}
+                </Link>
+              </div>
             </section>
-          </form>
-        </div>
+          </>
+        )}
       </main>
     </>
   );
