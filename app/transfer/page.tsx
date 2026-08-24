@@ -648,29 +648,27 @@ export default function TransferPage() {
       );
       return;
     }
-
-    const confirmationMessage =
-      isFrench
-        ? `Confirmer l'envoi de ${money(
-            transferAmount,
-            selectedCurrency
-          )} à ${selectedBeneficiary.name} ?\n\nFrais : ${money(
-            transferFee,
-            selectedCurrency
-          )}\nTotal débité : ${money(
-            totalDebit,
-            selectedCurrency
-          )}`
-        : `Confirm sending ${money(
-            transferAmount,
-            selectedCurrency
-          )} to ${selectedBeneficiary.name}?\n\nFee: ${money(
-            transferFee,
-            selectedCurrency
-          )}\nTotal debit: ${money(
-            totalDebit,
-            selectedCurrency
-          )}`;
+    const confirmationMessage = isFrench
+      ? `Confirmer l'envoi de ${money(
+          transferAmount,
+          selectedCurrency
+        )} à ${selectedBeneficiary.name} ?\n\nFrais : ${money(
+          transferFee,
+          selectedCurrency
+        )}\nTotal débité : ${money(
+          totalDebit,
+          selectedCurrency
+        )}`
+      : `Confirm sending ${money(
+          transferAmount,
+          selectedCurrency
+        )} to ${selectedBeneficiary.name}?\n\nFee: ${money(
+          transferFee,
+          selectedCurrency
+        )}\nTotal debit: ${money(
+          totalDebit,
+          selectedCurrency
+        )}`;
 
     if (!window.confirm(confirmationMessage)) {
       return;
@@ -697,51 +695,76 @@ export default function TransferPage() {
       }
 
       /*
-       * The PostgreSQL function performs the financial operation
-       * atomically:
+       * Generate one unique idempotency key for this transfer.
+       *
+       * The database stores this key with the transfer and ledger
+       * transaction. This protects the financial operation against
+       * accidental duplicate processing.
+       */
+      const idempotencyKey = crypto.randomUUID();
+
+      /*
+       * Transfer V2 performs the complete financial operation
+       * atomically inside PostgreSQL:
        *
        * 1. authenticate the user with auth.uid()
-       * 2. lock the selected wallet row
-       * 3. verify available funds
-       * 4. create the transfer
-       * 5. debit the wallet balance
-       * 6. create the financial-ledger entry
+       * 2. validate the transfer request
+       * 3. check the idempotency key
+       * 4. lock the selected wallet row
+       * 5. verify available funds
+       * 6. calculate the debit
+       * 7. create the transfer
+       * 8. debit the wallet
+       * 9. create the financial-ledger entry
        *
-       * If any database step fails, PostgreSQL rolls back the
-       * entire function call.
+       * If any database operation fails, PostgreSQL rolls back
+       * the entire transaction.
        */
       const { data, error: transferError } =
         await supabase.rpc(
-          "ndakocare_create_transfer",
+          "ndakocare_create_transfer_v2",
           {
-            p_source_currency:
-              selectedCurrency,
+            p_source_currency: selectedCurrency,
+
             p_recipient_name:
               selectedBeneficiary.name,
+
             p_phone:
               selectedBeneficiary.phone,
+
             p_country:
               selectedBeneficiary.country,
+
             p_method:
               selectedBeneficiary.provider ||
               "Ndako Wallet",
+
             p_relationship:
               selectedBeneficiary.relationship ||
               "",
+
             p_purpose:
               purpose.trim() ||
               "Family Support",
+
             p_notes:
               notes.trim() ||
               `Transfer to ${selectedBeneficiary.name}`,
+
             p_source_amount:
               transferAmount,
+
             p_fee:
               transferFee,
+
             p_destination_currency:
               destinationCurrency,
+
             p_exchange_rate:
               1,
+
+            p_idempotency_key:
+              idempotencyKey,
           }
         );
 
@@ -753,6 +776,7 @@ export default function TransferPage() {
         data as
           | {
               success?: boolean;
+              duplicate?: boolean;
               transfer_id?: string;
               transaction_id?: string;
               reference?: string;
@@ -766,6 +790,7 @@ export default function TransferPage() {
               exchange_rate?: number | string;
               destination_currency?: string;
               destination_amount?: number | string;
+              idempotency_key?: string;
             }
           | null;
 
@@ -783,8 +808,7 @@ export default function TransferPage() {
       if (Number.isFinite(returnedBalance)) {
         setWalletBalances((current) =>
           current.map((wallet) =>
-            wallet.currency ===
-            selectedCurrency
+            wallet.currency === selectedCurrency
               ? {
                   ...wallet,
                   balance: returnedBalance,
@@ -799,15 +823,7 @@ export default function TransferPage() {
         (isFrench
           ? "Référence indisponible"
           : "Reference unavailable");
-
-      resetTransferForm();
-
-      setSuccessMessage(
-        isFrench
-          ? `Transfert envoyé avec succès. Référence : ${reference}`
-          : `Transfer sent successfully. Reference: ${reference}`
-      );
-
+          
       /*
        * Reload balances and beneficiaries from Supabase so the
        * UI reflects the authoritative database state.

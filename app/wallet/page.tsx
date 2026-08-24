@@ -236,10 +236,16 @@ export default function WalletPage() {
         );
       }
 
-      const { data, error } = await supabase.rpc("ndakocare_create_deposit", {
-        p_currency: activeCurrency,
-        p_amount: depositAmount,
-      });
+      const idempotencyKey = crypto.randomUUID();
+
+      const { data, error } = await supabase.rpc(
+        "ndakocare_create_deposit_v2",
+        {
+          p_currency: activeCurrency,
+          p_amount: depositAmount,
+          p_idempotency_key: idempotencyKey,
+        }
+      );
 
       if (error) throw error;
 
@@ -344,11 +350,14 @@ export default function WalletPage() {
         );
       }
 
+      const idempotencyKey = crypto.randomUUID();
+
       const { data, error } = await supabase.rpc(
-        "ndakocare_create_withdrawal",
+        "ndakocare_create_withdrawal_v2",
         {
           p_currency: activeCurrency,
           p_amount: withdrawalAmount,
+          p_idempotency_key: idempotencyKey,
         }
       );
 
