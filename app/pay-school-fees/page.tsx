@@ -7,13 +7,12 @@ import { useLanguage } from "../context/LanguageContext";
 import { translations } from "../lib/translations";
 
 export default function SchoolFeesPage() {
+  const { language } = useLanguage();
 
-    const { language } = useLanguage();
-
-const text =
-  translations[
-    language as keyof typeof translations
-  ];
+  const text =
+    translations[
+      language as keyof typeof translations
+    ];
 
   const [studentName, setStudentName] =
     useState("");
@@ -47,19 +46,28 @@ const text =
       setLoading(true);
       setSuccess(false);
 
+      // ------------------------------------------------------
+      // AUTHENTICATED CUSTOMER
+      // ------------------------------------------------------
+
       const {
         data: { user },
+        error: userError,
       } = await supabase.auth.getUser();
 
-      if (!user) {
+      if (userError || !user) {
         alert("Please login first.");
         return;
       }
 
+      // ------------------------------------------------------
+      // VALIDATE FORM
+      // ------------------------------------------------------
+
       if (
-        !studentName ||
-        !schoolName ||
-        !country ||
+        !studentName.trim() ||
+        !schoolName.trim() ||
+        !country.trim() ||
         !amount
       ) {
         alert(
@@ -68,25 +76,126 @@ const text =
         return;
       }
 
-      const { error } = await supabase
-        .from("school_payments")
-        .insert([
-          {
-            user_id: user.id,
-            student_name: studentName,
-            school_name: schoolName,
-            country,
-            class_level: classLevel,
-            amount: Number(amount),
-            currency,
-            notes,
-          },
-        ]);
+      const numericAmount = Number(amount);
 
-      if (error) {
-        alert(error.message);
+      if (
+        !Number.isFinite(numericAmount) ||
+        numericAmount <= 0
+      ) {
+        alert(
+          "Please enter a valid payment amount."
+        );
         return;
       }
+
+      // ------------------------------------------------------
+      // FIND ACTIVE SCHOOL MERCHANT
+      // ------------------------------------------------------
+
+      const {
+        data: schoolMerchant,
+        error: schoolMerchantError,
+      } = await supabase
+        .from("merchants")
+        .select(
+          `
+            id,
+            name,
+            merchant_type,
+            country,
+            country_code,
+            currency,
+            city,
+            is_active
+          `
+        )
+        .eq(
+          "merchant_type",
+          "School"
+        )
+        .eq(
+          "is_active",
+          true
+        )
+        .ilike(
+          "name",
+          schoolName.trim()
+        )
+        .maybeSingle();
+
+      if (schoolMerchantError) {
+        console.error(
+          "Unable to find school merchant:",
+          schoolMerchantError
+        );
+
+        alert(
+          schoolMerchantError.message
+        );
+        return;
+      }
+
+      if (!schoolMerchant) {
+        alert(
+          "This school is not currently available in NdakoCare."
+        );
+        return;
+      }
+
+      // ------------------------------------------------------
+      // CREATE SCHOOL PAYMENT
+      // ------------------------------------------------------
+
+      const { error: insertError } =
+        await supabase
+          .from("school_payments")
+          .insert([
+            {
+              user_id: user.id,
+
+              // Connect this payment to the
+              // authenticated NdakoCare school merchant.
+              merchant_id:
+                schoolMerchant.id,
+
+              student_name:
+                studentName.trim(),
+
+              school_name:
+                schoolMerchant.name,
+
+              country:
+                schoolMerchant.country ||
+                country.trim(),
+
+              class_level:
+                classLevel.trim(),
+
+              amount:
+                numericAmount,
+
+              currency:
+                schoolMerchant.currency ||
+                currency,
+
+              notes:
+                notes.trim(),
+            },
+          ]);
+
+      if (insertError) {
+        console.error(
+          "School payment insert failed:",
+          insertError
+        );
+
+        alert(insertError.message);
+        return;
+      }
+
+      // ------------------------------------------------------
+      // SUCCESS
+      // ------------------------------------------------------
 
       setSuccess(true);
 
@@ -97,11 +206,18 @@ const text =
       setAmount("");
       setCurrency("USD");
       setNotes("");
-    } catch (err) {
-      console.error(err);
-      alert(
-        "Failed to save school payment."
+    } catch (error) {
+      console.error(
+        "Failed to save school payment:",
+        error
       );
+
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Failed to save school payment.";
+
+      alert(message);
     } finally {
       setLoading(false);
     }
@@ -124,6 +240,8 @@ const text =
 
           <div className="space-y-5">
 
+            {/* STUDENT NAME */}
+
             <div>
               <label className="block mb-2 font-medium">
                 {text.studentName}
@@ -141,6 +259,8 @@ const text =
               />
             </div>
 
+            {/* SCHOOL NAME */}
+
             <div>
               <label className="block mb-2 font-medium">
                 {text.schoolName}
@@ -154,13 +274,16 @@ const text =
                     e.target.value
                   )
                 }
+                placeholder="Bangui International School"
                 className="w-full p-4 border rounded-xl"
               />
             </div>
 
+            {/* COUNTRY */}
+
             <div>
               <label className="block mb-2 font-medium">
-               {text.country}
+                {text.country}
               </label>
 
               <input
@@ -175,9 +298,11 @@ const text =
               />
             </div>
 
+            {/* CLASS LEVEL */}
+
             <div>
               <label className="block mb-2 font-medium">
-               {text.classLevel}
+                {text.classLevel}
               </label>
 
               <input
@@ -192,14 +317,19 @@ const text =
               />
             </div>
 
+            {/* AMOUNT */}
+
             <div>
               <label className="block mb-2 font-medium">
                 {text.amount}
               </label>
 
               <div className="flex gap-3">
+
                 <input
                   type="number"
+                  min="0"
+                  step="0.01"
                   value={amount}
                   onChange={(e) =>
                     setAmount(
@@ -218,13 +348,27 @@ const text =
                   }
                   className="p-4 border rounded-xl"
                 >
-                  <option>USD</option>
-                  <option>EUR</option>
-                  <option>XAF</option>
-                  <option>CDF</option>
+                  <option value="USD">
+                    USD
+                  </option>
+
+                  <option value="EUR">
+                    EUR
+                  </option>
+
+                  <option value="XAF">
+                    XAF
+                  </option>
+
+                  <option value="CDF">
+                    CDF
+                  </option>
                 </select>
+
               </div>
             </div>
+
+            {/* NOTES */}
 
             <div>
               <label className="block mb-2 font-medium">
@@ -243,20 +387,25 @@ const text =
               />
             </div>
 
+            {/* SUCCESS MESSAGE */}
+
             {success && (
               <div className="bg-green-100 text-green-700 p-4 rounded-xl">
                 {text.schoolPaymentSuccess}
               </div>
             )}
 
+            {/* SUBMIT */}
+
             <button
+              type="button"
               onClick={handleSubmit}
               disabled={loading}
-              className="w-full bg-green-700 text-white p-4 rounded-xl font-bold hover:bg-green-800"
+              className="w-full bg-green-700 text-white p-4 rounded-xl font-bold hover:bg-green-800 disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {loading
-            ? text.submitting
-            : text.submitSchoolFee}
+                ? text.submitting
+                : text.submitSchoolFee}
             </button>
 
           </div>

@@ -117,6 +117,21 @@ type PharmacyOrder = {
   beneficiary?: Beneficiary | null;
 };
 
+type SchoolPayment = {
+  id: string;
+  user_id: string | null;
+  merchant_id: string | null;
+  student_name: string;
+  school_name: string;
+  country: string | null;
+  amount: number | null;
+  currency: string | null;
+  notes: string | null;
+  status: string | null;
+  created_at: string;
+  class_level: string | null;
+};
+
 type OrderStatus =
   | "Pending"
   | "Processing"
@@ -269,6 +284,9 @@ export default function MerchantPortalPage() {
   const [pharmacyOrders, setPharmacyOrders] =
     useState<PharmacyOrder[]>([]);
 
+  const [schoolPayments, setSchoolPayments] =
+    useState<SchoolPayment[]>([]);
+
   const [selectedStatus, setSelectedStatus] =
     useState("all");
 
@@ -301,6 +319,9 @@ export default function MerchantPortalPage() {
 
   const isPharmacyMerchant =
     merchantType === "pharmacy";
+
+  const isSchoolMerchant =
+    merchantType === "school";
 
   // ==========================================================
   // LOAD DATA
@@ -712,12 +733,74 @@ export default function MerchantPortalPage() {
         }
 
         // ------------------------------------------------------
+        // SCHOOL MERCHANT
+        // ------------------------------------------------------
+
+        if (type === "school") {
+          setGroceryOrders([]);
+          setPharmacyOrders([]);
+          setPharmacy(null);
+
+          const {
+            data: schoolPaymentsData,
+            error: schoolPaymentsError,
+          } = await supabase
+            .from("school_payments")
+            .select(
+              `
+                id,
+                user_id,
+                merchant_id,
+                student_name,
+                school_name,
+                country,
+                amount,
+                currency,
+                notes,
+                status,
+                created_at,
+                class_level
+              `
+            )
+            .eq(
+              "merchant_id",
+              authenticatedMerchant.id
+            )
+            .order("created_at", {
+              ascending: false,
+            });
+
+          if (schoolPaymentsError) {
+            throw schoolPaymentsError;
+          }
+
+          const normalizedSchoolPayments =
+            (
+              (schoolPaymentsData ?? []) as SchoolPayment[]
+            ).map((payment) => ({
+              ...payment,
+              amount:
+                payment.amount === null
+                  ? null
+                  : Number(payment.amount),
+            }));
+
+          setSchoolPayments(
+            normalizedSchoolPayments
+          );
+
+          return;
+        }
+
+
+        // ------------------------------------------------------
         // UNSUPPORTED MERCHANT TYPE
         // ------------------------------------------------------
 
         setGroceryOrders([]);
-        setPharmacyOrders([]);
-        setPharmacy(null);
+	setPharmacyOrders([]);
+	setSchoolPayments([]);
+	setPharmacy(null);
 
         setErrorMessage(
           isFr
@@ -808,8 +891,63 @@ export default function MerchantPortalPage() {
       selectedStatus,
     ]);
 
+  const filteredSchoolPayments =
+    useMemo(() => {
+      return schoolPayments.filter(
+        (payment) => {
+          if (selectedStatus === "all") {
+            return true;
+          }
+
+          return (
+            (payment.status ?? "Pending")
+              .trim()
+              .toLowerCase() ===
+            selectedStatus.toLowerCase()
+          );
+        }
+      );
+    }, [
+      schoolPayments,
+      selectedStatus,
+    ]);
+
+  const schoolPendingTotal =
+    useMemo(() => {
+      return schoolPayments
+        .filter(
+          (payment) =>
+            (payment.status ?? "Pending")
+              .trim()
+              .toLowerCase() === "pending"
+        )
+        .reduce(
+          (sum, payment) =>
+            sum + Number(payment.amount ?? 0),
+          0
+        );
+    }, [schoolPayments]);
+
+  const schoolCompletedTotal =
+    useMemo(() => {
+      return schoolPayments
+        .filter(
+          (payment) =>
+            (payment.status ?? "Pending")
+              .trim()
+              .toLowerCase() === "completed"
+        )
+        .reduce(
+          (sum, payment) =>
+            sum + Number(payment.amount ?? 0),
+          0
+        );
+    }, [schoolPayments]);
+
   const activeOrderStatuses =
-    isPharmacyMerchant
+    isSchoolMerchant
+      ? schoolPayments
+      : isPharmacyMerchant
       ? pharmacyOrders
       : groceryOrders;
 
@@ -851,8 +989,16 @@ export default function MerchantPortalPage() {
           ? "Prête"
           : "Ready";
 
-      case "delivered":
       case "completed":
+        return isSchoolMerchant
+          ? isFr
+            ? "Terminée"
+            : "Completed"
+          : isFr
+          ? "Livrée"
+          : "Delivered";
+
+      case "delivered":
         return isFr
           ? "Livrée"
           : "Delivered";
@@ -1223,6 +1369,120 @@ export default function MerchantPortalPage() {
   }
 
   // ==========================================================
+  // SCHOOL PAYMENT STATUS UPDATE
+  // ==========================================================
+
+  async function updateSchoolPaymentStatus(
+    payment: SchoolPayment,
+    newStatus: "Pending" | "Completed"
+  ) {
+    if (!merchant) {
+      return;
+    }
+
+    const currentStatus =
+      payment.status ?? "Pending";
+
+    if (
+      currentStatus
+        .trim()
+        .toLowerCase() ===
+      newStatus.toLowerCase()
+    ) {
+      return;
+    }
+
+    const confirmed =
+      window.confirm(
+        isFr
+          ? `Passer le paiement scolaire de « ${getStatusLabel(
+              currentStatus
+            )} » à « ${getStatusLabel(
+              newStatus
+            )} » ?`
+          : `Change school payment from "${getStatusLabel(
+              currentStatus
+            )}" to "${getStatusLabel(
+              newStatus
+            )}"?`
+      );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setUpdatingOrderId(payment.id);
+      setErrorMessage("");
+      setSuccessMessage("");
+
+      const { data, error } =
+        await supabase
+          .from("school_payments")
+          .update({
+            status: newStatus,
+          })
+          .eq("id", payment.id)
+          .eq("merchant_id", merchant.id)
+          .select("id, status")
+          .maybeSingle();
+
+      if (error) {
+        throw error;
+      }
+
+      if (!data) {
+        throw new Error(
+          isFr
+            ? "Le paiement scolaire n'a pas pu être mis à jour."
+            : "The school payment could not be updated."
+        );
+      }
+
+      setSchoolPayments(
+        (currentPayments) =>
+          currentPayments.map(
+            (currentPayment) =>
+              currentPayment.id === payment.id
+                ? {
+                    ...currentPayment,
+                    status: newStatus,
+                  }
+                : currentPayment
+          )
+      );
+
+      setSuccessMessage(
+        isFr
+          ? `Paiement scolaire mis à jour : ${getStatusLabel(
+              newStatus
+            )}.`
+          : `School payment updated to ${getStatusLabel(
+              newStatus
+            )}.`
+      );
+    } catch (error) {
+      console.error(
+        "Unable to update school payment:",
+        error
+      );
+
+      const message =
+        error instanceof Error
+          ? error.message
+          : String(error);
+
+      setErrorMessage(
+        isFr
+          ? `Impossible de mettre à jour le paiement scolaire. ${message}`
+          : `Unable to update the school payment. ${message}`
+      );
+    } finally {
+      setUpdatingOrderId(null);
+    }
+  }
+
+  // ==========================================================
   // LOADING
   // ==========================================================
 
@@ -1281,10 +1541,16 @@ export default function MerchantPortalPage() {
                 </p>
 
                 <h1 className="text-4xl font-bold text-gray-900">
-                  {isPharmacyMerchant
+                  {isSchoolMerchant
+                    ? "🏫"
+                    : isPharmacyMerchant
                     ? "💊"
                     : "🏪"}{" "}
-                  {isPharmacyMerchant
+                  {isSchoolMerchant
+                    ? isFr
+                      ? "Portail Scolaire"
+                      : "School Portal"
+                    : isPharmacyMerchant
                     ? isFr
                       ? "Portail Pharmacie"
                       : "Pharmacy Portal"
@@ -1294,7 +1560,11 @@ export default function MerchantPortalPage() {
                 </h1>
 
                 <p className="mt-3 max-w-3xl text-gray-600">
-                  {isPharmacyMerchant
+                  {isSchoolMerchant
+                    ? isFr
+                      ? "Gérez les demandes de frais scolaires, suivez les paiements et mettez à jour leur statut."
+                      : "Manage school fee requests, track payments, and update payment status."
+                    : isPharmacyMerchant
                     ? isFr
                       ? "Gérez les commandes de médicaments, préparez les produits et mettez à jour leur statut."
                       : "Manage medicine orders, prepare prescriptions and products, and update fulfillment status."
@@ -1357,7 +1627,9 @@ export default function MerchantPortalPage() {
                     </p>
 
                     <h2 className="mt-1 text-2xl font-bold">
-                      {isPharmacyMerchant
+                      {isSchoolMerchant
+                        ? "🏫"
+                        : isPharmacyMerchant
                         ? "💊"
                         : "🏪"}{" "}
                       {merchant.name}
@@ -1392,7 +1664,11 @@ export default function MerchantPortalPage() {
                     </p>
 
                     <p className="font-bold">
-                      {isPharmacyMerchant
+                      {isSchoolMerchant
+                        ? isFr
+                          ? "École"
+                          : "School"
+                        : isPharmacyMerchant
                         ? isFr
                           ? "Pharmacie"
                           : "Pharmacy"
@@ -1449,67 +1725,98 @@ export default function MerchantPortalPage() {
                   COUNTS
               ============================================== */}
 
-              <section className="mb-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              {isSchoolMerchant ? (
+                <section className="mb-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
 
-                <div className="rounded-2xl bg-white p-5 shadow-sm">
-                  <p className="text-sm text-gray-500">
-                    {isFr
-                      ? "En attente"
-                      : "Pending"}
-                  </p>
+                  <div className="rounded-2xl bg-white p-5 shadow-sm">
+                    <p className="text-sm text-gray-500">
+                      {isFr ? "Paiements en attente" : "Pending Payments"}
+                    </p>
+                    <p className="mt-1 text-3xl font-bold text-amber-700">
+                      {getStatusCount("Pending")}
+                    </p>
+                  </div>
 
-                  <p className="mt-1 text-3xl font-bold text-amber-700">
-                    {getStatusCount(
-                      "Pending"
-                    )}
-                  </p>
-                </div>
+                  <div className="rounded-2xl bg-white p-5 shadow-sm">
+                    <p className="text-sm text-gray-500">
+                      {isFr ? "Paiements terminés" : "Completed Payments"}
+                    </p>
+                    <p className="mt-1 text-3xl font-bold text-green-700">
+                      {getStatusCount("Completed")}
+                    </p>
+                  </div>
 
-                <div className="rounded-2xl bg-white p-5 shadow-sm">
-                  <p className="text-sm text-gray-500">
-                    {isFr
-                      ? "En traitement"
-                      : "Processing"}
-                  </p>
+                  <div className="rounded-2xl bg-white p-5 shadow-sm">
+                    <p className="text-sm text-gray-500">
+                      {isFr ? "Total en attente" : "Pending Total"}
+                    </p>
+                    <p className="mt-1 text-2xl font-bold text-amber-700">
+                      {formatMoney(
+                        schoolPendingTotal,
+                        merchant.currency ?? "XAF",
+                        language
+                      )}
+                    </p>
+                  </div>
 
-                  <p className="mt-1 text-3xl font-bold text-blue-700">
-                    {getStatusCount(
-                      "Processing"
-                    )}
-                  </p>
-                </div>
+                  <div className="rounded-2xl bg-white p-5 shadow-sm">
+                    <p className="text-sm text-gray-500">
+                      {isFr ? "Total reçu" : "Total Received"}
+                    </p>
+                    <p className="mt-1 text-2xl font-bold text-green-700">
+                      {formatMoney(
+                        schoolCompletedTotal,
+                        merchant.currency ?? "XAF",
+                        language
+                      )}
+                    </p>
+                  </div>
 
-                <div className="rounded-2xl bg-white p-5 shadow-sm">
-                  <p className="text-sm text-gray-500">
-                    {isFr
-                      ? "Prêtes"
-                      : "Ready"}
-                  </p>
+                </section>
+              ) : (
+                <section className="mb-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
 
-                  <p className="mt-1 text-3xl font-bold text-purple-700">
-                    {getStatusCount(
-                      "Ready"
-                    )}
-                  </p>
-                </div>
+                  <div className="rounded-2xl bg-white p-5 shadow-sm">
+                    <p className="text-sm text-gray-500">
+                      {isFr ? "En attente" : "Pending"}
+                    </p>
+                    <p className="mt-1 text-3xl font-bold text-amber-700">
+                      {getStatusCount("Pending")}
+                    </p>
+                  </div>
 
-                <div className="rounded-2xl bg-white p-5 shadow-sm">
-                  <p className="text-sm text-gray-500">
-                    {isFr
-                      ? "Livrées"
-                      : "Delivered"}
-                  </p>
+                  <div className="rounded-2xl bg-white p-5 shadow-sm">
+                    <p className="text-sm text-gray-500">
+                      {isFr ? "En traitement" : "Processing"}
+                    </p>
+                    <p className="mt-1 text-3xl font-bold text-blue-700">
+                      {getStatusCount("Processing")}
+                    </p>
+                  </div>
 
-                  <p className="mt-1 text-3xl font-bold text-green-700">
-                    {getStatusCount(
-                      "Delivered"
-                    )}
-                  </p>
-                </div>
-              </section>
+                  <div className="rounded-2xl bg-white p-5 shadow-sm">
+                    <p className="text-sm text-gray-500">
+                      {isFr ? "Prêtes" : "Ready"}
+                    </p>
+                    <p className="mt-1 text-3xl font-bold text-purple-700">
+                      {getStatusCount("Ready")}
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl bg-white p-5 shadow-sm">
+                    <p className="text-sm text-gray-500">
+                      {isFr ? "Livrées" : "Delivered"}
+                    </p>
+                    <p className="mt-1 text-3xl font-bold text-green-700">
+                      {getStatusCount("Delivered")}
+                    </p>
+                  </div>
+
+                </section>
+              )}
 
               {/* ==============================================
-                  ORDER FILTER
+                  ORDER / PAYMENT FILTER
               ============================================== */}
 
               <section className="mb-6 rounded-2xl bg-white p-5 shadow-sm">
@@ -1517,7 +1824,11 @@ export default function MerchantPortalPage() {
 
                   <div>
                     <h2 className="text-xl font-bold">
-                      {isPharmacyMerchant
+                      {isSchoolMerchant
+                        ? isFr
+                          ? "Paiements scolaires"
+                          : "School Payments"
+                        : isPharmacyMerchant
                         ? isFr
                           ? "Commandes de pharmacie"
                           : "Pharmacy Orders"
@@ -1527,10 +1838,16 @@ export default function MerchantPortalPage() {
                     </h2>
 
                     <p className="mt-1 text-sm text-gray-500">
-                      {isPharmacyMerchant
+                      {isSchoolMerchant
+                        ? filteredSchoolPayments.length
+                        : isPharmacyMerchant
                         ? filteredPharmacyOrders.length
                         : filteredGroceryOrders.length}{" "}
-                      {isFr
+                      {isSchoolMerchant
+                        ? isFr
+                          ? "paiement(s)"
+                          : "payment(s)"
+                        : isFr
                         ? "commande(s)"
                         : "order(s)"}
                     </p>
@@ -1539,45 +1856,209 @@ export default function MerchantPortalPage() {
                   <select
                     value={selectedStatus}
                     onChange={(event) =>
-                      setSelectedStatus(
-                        event.target.value
-                      )
+                      setSelectedStatus(event.target.value)
                     }
                     className="rounded-xl border border-gray-300 bg-white px-4 py-3"
                   >
                     <option value="all">
-                      {isFr
-                        ? "Tous les statuts"
-                        : "All Statuses"}
+                      {isFr ? "Tous les statuts" : "All Statuses"}
                     </option>
 
                     <option value="Pending">
-                      {isFr
-                        ? "En attente"
-                        : "Pending"}
+                      {isFr ? "En attente" : "Pending"}
                     </option>
 
-                    <option value="Processing">
-                      {isFr
-                        ? "En traitement"
-                        : "Processing"}
-                    </option>
-
-                    <option value="Ready">
-                      {isFr
-                        ? "Prête"
-                        : "Ready"}
-                    </option>
-
-                    <option value="Delivered">
-                      {isFr
-                        ? "Livrée"
-                        : "Delivered"}
-                    </option>
+                    {isSchoolMerchant ? (
+                      <option value="Completed">
+                        {isFr ? "Terminée" : "Completed"}
+                      </option>
+                    ) : (
+                      <>
+                        <option value="Processing">
+                          {isFr ? "En traitement" : "Processing"}
+                        </option>
+                        <option value="Ready">
+                          {isFr ? "Prête" : "Ready"}
+                        </option>
+                        <option value="Delivered">
+                          {isFr ? "Livrée" : "Delivered"}
+                        </option>
+                      </>
+                    )}
                   </select>
 
                 </div>
               </section>
+
+              {/* ==============================================
+                  SCHOOL PAYMENTS
+              ============================================== */}
+
+              {isSchoolMerchant &&
+                (filteredSchoolPayments.length === 0 ? (
+                  <section className="rounded-3xl bg-white p-10 text-center shadow-sm">
+                    <div className="mb-3 text-5xl">🏫</div>
+                    <h2 className="text-2xl font-bold">
+                      {isFr ? "Aucun paiement scolaire" : "No School Payments"}
+                    </h2>
+                    <p className="mt-2 text-gray-500">
+                      {isFr
+                        ? "Aucun paiement scolaire ne correspond au statut sélectionné."
+                        : "No school payments match the selected status."}
+                    </p>
+                  </section>
+                ) : (
+                  <div className="space-y-6">
+                    {filteredSchoolPayments.map((payment) => {
+                      const status = payment.status ?? "Pending";
+                      const currency = normalizeCurrency(
+                        payment.currency ?? merchant.currency ?? "XAF"
+                      );
+                      const amount = Number(payment.amount ?? 0);
+                      const isCompleted =
+                        status.trim().toLowerCase() === "completed";
+
+                      return (
+                        <article
+                          key={payment.id}
+                          className="overflow-hidden rounded-3xl bg-white shadow-sm"
+                        >
+                          <div className="border-b border-gray-200 p-6 md:p-7">
+                            <div className="flex flex-col justify-between gap-5 lg:flex-row lg:items-start">
+                              <div>
+                                <div className="flex flex-wrap items-center gap-3">
+                                  <h2 className="text-2xl font-bold">
+                                    🏫 {isFr ? "Paiement scolaire" : "School Payment"}
+                                  </h2>
+                                  <span
+                                    className={`rounded-full px-3 py-1 text-sm font-bold ${getStatusClass(
+                                      status
+                                    )}`}
+                                  >
+                                    {getStatusLabel(status)}
+                                  </span>
+                                </div>
+
+                                <p className="mt-2 text-sm text-gray-500">
+                                  {formatDate(payment.created_at)}
+                                </p>
+                              </div>
+
+                              <div className="lg:text-right">
+                                <p className="text-sm text-gray-500">
+                                  {isFr ? "Montant" : "Amount"}
+                                </p>
+                                <p className="text-3xl font-extrabold text-green-700">
+                                  {formatMoney(amount, currency, language)}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="grid gap-6 border-b border-gray-200 p-6 md:grid-cols-2 md:p-7">
+                            <div>
+                              <h3 className="mb-3 font-bold">
+                                {isFr ? "Élève" : "Student"}
+                              </h3>
+                              <div className="space-y-2 text-sm">
+                                <p>
+                                  <span className="text-gray-500">
+                                    {isFr ? "Nom" : "Name"}:
+                                  </span>{" "}
+                                  <strong>{payment.student_name}</strong>
+                                </p>
+                                <p>
+                                  <span className="text-gray-500">
+                                    {isFr ? "Classe / Niveau" : "Class / Grade"}:
+                                  </span>{" "}
+                                  <strong>{payment.class_level || "—"}</strong>
+                                </p>
+                                <p>
+                                  <span className="text-gray-500">
+                                    {isFr ? "Pays" : "Country"}:
+                                  </span>{" "}
+                                  <strong>{payment.country || "—"}</strong>
+                                </p>
+                              </div>
+                            </div>
+
+                            <div>
+                              <h3 className="mb-3 font-bold">
+                                {isFr ? "École" : "School"}
+                              </h3>
+                              <div className="space-y-2 text-sm">
+                                <p>
+                                  <span className="text-gray-500">
+                                    {isFr ? "Nom" : "Name"}:
+                                  </span>{" "}
+                                  <strong>{payment.school_name}</strong>
+                                </p>
+                                <p>
+                                  <span className="text-gray-500">
+                                    {isFr ? "Devise" : "Currency"}:
+                                  </span>{" "}
+                                  <strong>{currency}</strong>
+                                </p>
+                                <p>
+                                  <span className="text-gray-500">
+                                    {isFr ? "Identifiant du paiement" : "Payment ID"}:
+                                  </span>{" "}
+                                  <strong className="font-mono text-xs">
+                                    {payment.id}
+                                  </strong>
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+
+                          {payment.notes && (
+                            <div className="border-b border-gray-200 p-6 md:p-7">
+                              <h3 className="mb-2 font-bold">
+                                {isFr ? "Notes" : "Notes"}
+                              </h3>
+                              <p className="text-gray-600">{payment.notes}</p>
+                            </div>
+                          )}
+
+                          <div className="p-6 md:p-7">
+                            <h3 className="mb-2 text-xl font-bold">
+                              {isFr ? "Traitement du paiement" : "Payment Processing"}
+                            </h3>
+
+                            <p className="mb-5 text-sm text-gray-500">
+                              {isFr ? "Statut actuel :" : "Current status:"}{" "}
+                              <strong>{getStatusLabel(status)}</strong>
+                            </p>
+
+                            {!isCompleted && (
+                              <button
+                                type="button"
+                                disabled={updatingOrderId === payment.id}
+                                onClick={() =>
+                                  void updateSchoolPaymentStatus(
+                                    payment,
+                                    "Completed"
+                                  )
+                                }
+                                className="rounded-xl bg-green-700 px-5 py-3 font-semibold text-white hover:bg-green-800 disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                {isFr ? "Marquer comme terminé" : "Mark as Completed"}
+                              </button>
+                            )}
+
+                            {updatingOrderId === payment.id && (
+                              <p className="mt-4 text-sm font-medium text-gray-500">
+                                {isFr
+                                  ? "Mise à jour du paiement..."
+                                  : "Updating payment..."}
+                              </p>
+                            )}
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                ))}
 
               {/* ==============================================
                   GROCERY ORDERS
@@ -2301,19 +2782,19 @@ export default function MerchantPortalPage() {
 
                                   <p>
                                     <span className="text-gray-500">
-                                      {isFr ? "B�n�ficiaire" : "Beneficiary"}:
+                                      {isFr ? "B n ficiaire" : "Beneficiary"}:
                                     </span>{" "}
                                     <strong>
-                                      {order.beneficiary?.name ?? "�"}
+                                      {order.beneficiary?.name ?? " "}
                                     </strong>
                                   </p>
 
                                   <p>
                                     <span className="text-gray-500">
-                                      {isFr ? "T�l�phone" : "Phone"}:
+                                      {isFr ? "T l phone" : "Phone"}:
                                     </span>{" "}
                                     <strong>
-                                      {order.beneficiary?.phone ?? "�"}
+                                      {order.beneficiary?.phone ?? " "}
                                     </strong>
                                   </p>
 
@@ -2322,7 +2803,7 @@ export default function MerchantPortalPage() {
                                       {isFr ? "Pays" : "Country"}:
                                     </span>{" "}
                                     <strong>
-                                      {order.beneficiary?.country ?? "�"}
+                                      {order.beneficiary?.country ?? " "}
                                       {order.beneficiary?.country_code
                                         ? ` (${order.beneficiary.country_code})`
                                         : ""}
@@ -2334,13 +2815,13 @@ export default function MerchantPortalPage() {
                                       {isFr ? "Relation" : "Relationship"}:
                                     </span>{" "}
                                     <strong>
-                                      {order.beneficiary?.relationship ?? "�"}
+                                      {order.beneficiary?.relationship ?? " "}
                                     </strong>
                                   </p>
 
                                   <p>
                                     <span className="text-gray-500">
-                                      {isFr ? "Quantit�" : "Quantity"}:
+                                      {isFr ? "Quantit " : "Quantity"}:
                                     </span>{" "}
                                     <strong>{quantity}</strong>
                                   </p>
