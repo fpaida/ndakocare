@@ -298,6 +298,16 @@ export default function Navbar() {
                     : "Wallet"}
                 </Link>
 
+                {/* Nia AI Assistant */}
+                <Link
+                  href="/nia"
+                  className={navLink}
+                >
+                  {isFr
+                    ? "Demander à Nia"
+                    : "Ask Nia"}
+                </Link>
+
                 <Link
                   href="/beneficiaries"
                   className={navLink}
