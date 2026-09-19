@@ -24,6 +24,15 @@ import {
   FaBell,
 } from "react-icons/fa";
 
+type WalletTransaction = {
+  id: string;
+  transaction_type: string | null;
+  amount: number | string | null;
+  currency: string | null;
+  description: string | null;
+  created_at: string | null;
+};
+
 export default function DashboardPage() {
   const router = useRouter();
 
@@ -31,15 +40,44 @@ export default function DashboardPage() {
   const isFr = language === "fr";
 
   const [walletBalance, setWalletBalance] = useState(0);
+  const [preferredCurrency, setPreferredCurrency] =
+    useState("USD");
   const [savingsCount, setSavingsCount] = useState(0);
-  const [communityCount, setCommunityCount] = useState(0);
-  const [notificationsCount, setNotificationsCount] = useState(0);
-  const [recentActivity, setRecentActivity] = useState<any[]>([]);
+  const [communityCount, setCommunityCount] =
+    useState(0);
+  const [
+    notificationsCount,
+    setNotificationsCount,
+  ] = useState(0);
+  const [recentActivity, setRecentActivity] =
+    useState<WalletTransaction[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     void loadDashboard();
   }, []);
+
+  const formatCurrency = (
+    amount: number,
+    currency: string
+  ) => {
+    const normalizedCurrency =
+      currency?.trim().toUpperCase() || "USD";
+
+    try {
+      return new Intl.NumberFormat(
+        isFr ? "fr-FR" : "en-US",
+        {
+          style: "currency",
+          currency: normalizedCurrency,
+        }
+      ).format(amount);
+    } catch {
+      return `${normalizedCurrency} ${amount.toFixed(
+        2
+      )}`;
+    }
+  };
 
   const loadDashboard = async () => {
     try {
@@ -143,18 +181,56 @@ export default function DashboardPage() {
        */
 
       /*
-       * Wallet balance
+       * Preferred currency
+       *
+       * profiles.preferred_currency is the authoritative
+       * currency preference for the customer.
        */
-      const { data: wallet, error: walletError } =
-        await supabase
-          .from("wallets")
-          .select("balance")
-          .eq("user_id", userId)
-          .maybeSingle();
+      const {
+        data: profile,
+        error: profileError,
+      } = await supabase
+        .from("profiles")
+        .select("preferred_currency")
+        .eq("id", userId)
+        .maybeSingle();
+
+      if (profileError) {
+        console.error(
+          "Unable to load preferred currency:",
+          profileError
+        );
+      }
+
+      const profileCurrency =
+        profile?.preferred_currency
+          ?.trim()
+          .toUpperCase() || "USD";
+
+      setPreferredCurrency(profileCurrency);
+
+      /*
+       * Wallet balance
+       *
+       * NdakoCare uses wallet_balances for the
+       * current multi-currency wallet system.
+       *
+       * Load only the balance that corresponds
+       * to the customer's preferred currency.
+       */
+      const {
+        data: wallet,
+        error: walletError,
+      } = await supabase
+        .from("wallet_balances")
+        .select("balance, currency")
+        .eq("user_id", userId)
+        .eq("currency", profileCurrency)
+        .maybeSingle();
 
       if (walletError) {
         console.error(
-          "Unable to load wallet:",
+          "Unable to load wallet balance:",
           walletError
         );
       }
@@ -237,13 +313,25 @@ export default function DashboardPage() {
 
       /*
        * Recent wallet activity
+       *
+       * Each transaction carries its own currency,
+       * so activity must not assume USD.
        */
       const {
         data: activity,
         error: activityError,
       } = await supabase
         .from("wallet_transactions")
-        .select("*")
+        .select(
+          `
+            id,
+            transaction_type,
+            amount,
+            currency,
+            description,
+            created_at
+          `
+        )
         .eq("user_id", userId)
         .order("created_at", {
           ascending: false,
@@ -257,7 +345,9 @@ export default function DashboardPage() {
         );
       }
 
-      setRecentActivity(activity || []);
+      setRecentActivity(
+        (activity || []) as WalletTransaction[]
+      );
     } catch (error) {
       console.error(
         "Unable to load dashboard:",
@@ -352,9 +442,10 @@ export default function DashboardPage() {
                   ? "Solde Disponible"
                   : "Available Balance"
               }
-              value={`$${walletBalance.toFixed(
-                2
-              )}`}
+              value={formatCurrency(
+                walletBalance,
+                preferredCurrency
+              )}
               icon={<FaWallet />}
               color="text-green-700"
             />
@@ -570,9 +661,23 @@ export default function DashboardPage() {
                 <div className="space-y-4">
                   {recentActivity.map(
                     (item) => {
+                      const transactionType =
+                        item.transaction_type || "";
+
+                      const normalizedType =
+                        transactionType.toLowerCase();
+
                       const isDeposit =
-                        item.transaction_type ===
-                        "Deposit";
+                        normalizedType ===
+                          "deposit" ||
+                        normalizedType ===
+                          "credit";
+
+                      const transactionCurrency =
+                        item.currency
+                          ?.trim()
+                          .toUpperCase() ||
+                        preferredCurrency;
 
                       return (
                         <div
@@ -582,9 +687,7 @@ export default function DashboardPage() {
                           <div className="flex justify-between gap-4">
 
                             <p className="font-semibold">
-                              {
-                                item.transaction_type
-                              }
+                              {transactionType}
                             </p>
 
                             <p
@@ -597,24 +700,35 @@ export default function DashboardPage() {
                               {isDeposit
                                 ? "+"
                                 : "-"}
-                              $
-                              {Number(
-                                item.amount
-                              ).toFixed(2)}
+                              {formatCurrency(
+                                Math.abs(
+                                  Number(
+                                    item.amount ||
+                                      0
+                                  )
+                                ),
+                                transactionCurrency
+                              )}
                             </p>
                           </div>
 
-                          <p className="text-sm text-gray-500">
-                            {
-                              item.description
-                            }
-                          </p>
+                          {item.description && (
+                            <p className="text-sm text-gray-500">
+                              {item.description}
+                            </p>
+                          )}
 
-                          <p className="text-xs text-gray-400">
-                            {new Date(
-                              item.created_at
-                            ).toLocaleDateString()}
-                          </p>
+                          {item.created_at && (
+                            <p className="text-xs text-gray-400">
+                              {new Date(
+                                item.created_at
+                              ).toLocaleDateString(
+                                isFr
+                                  ? "fr-FR"
+                                  : "en-US"
+                              )}
+                            </p>
+                          )}
                         </div>
                       );
                     }
