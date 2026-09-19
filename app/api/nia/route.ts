@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 import { NDAKOCARE_KNOWLEDGE } from "../../lib/niaKnowledge";
+import { supabaseAdmin } from "../../lib/supabaseAdmin";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -8,6 +9,9 @@ const openai = new OpenAI({
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+const NIA_RATE_LIMIT = 20;
+const NIA_RATE_WINDOW_MINUTES = 10;
 
 const NIA_INSTRUCTIONS = `
 You are Nia, the official AI support assistant for NdakoCare.
@@ -251,6 +255,13 @@ OFFICIAL NDAKOCARE PRODUCT KNOWLEDGE
 ${NDAKOCARE_KNOWLEDGE}
 `;
 
+type NiaRateLimitResult = {
+  allowed: boolean;
+  request_count: number;
+  remaining: number;
+  retry_after_seconds: number;
+};
+
 export async function POST(request: Request) {
   try {
     /*
@@ -332,8 +343,82 @@ export async function POST(request: Request) {
     }
 
     /*
-     * Only after authentication succeeds do we check OpenAI
-     * configuration and potentially spend OpenAI API credits.
+     * Rate limiting is enforced only after Supabase has verified the
+     * authenticated user.
+     *
+     * The user ID comes from the validated Supabase session, never
+     * from browser input. The RPC is executed with the server-only
+     * Supabase admin client.
+     *
+     * Blocked requests stop here and never reach OpenAI.
+     */
+    const { data: rateLimitData, error: rateLimitError } =
+      await supabaseAdmin.rpc("check_nia_rate_limit", {
+        p_user_id: user.id,
+        p_limit: NIA_RATE_LIMIT,
+        p_window_minutes: NIA_RATE_WINDOW_MINUTES,
+      });
+
+    if (rateLimitError) {
+      console.error(
+        "Nia API error: Rate limit check failed:",
+        rateLimitError.message
+      );
+
+      return Response.json(
+        {
+          error: "Nia is temporarily unavailable.",
+        },
+        {
+          status: 500,
+        }
+      );
+    }
+
+    const rateLimitResult =
+      Array.isArray(rateLimitData) && rateLimitData.length > 0
+        ? (rateLimitData[0] as NiaRateLimitResult)
+        : null;
+
+    if (!rateLimitResult) {
+      console.error(
+        "Nia API error: Rate limit check returned no result."
+      );
+
+      return Response.json(
+        {
+          error: "Nia is temporarily unavailable.",
+        },
+        {
+          status: 500,
+        }
+      );
+    }
+
+    if (!rateLimitResult.allowed) {
+      const retryAfterSeconds = Math.max(
+        Number(rateLimitResult.retry_after_seconds) || 1,
+        1
+      );
+
+      return Response.json(
+        {
+          error:
+            "Too many requests. Please wait a few minutes and try again.",
+          retryAfterSeconds,
+        },
+        {
+          status: 429,
+          headers: {
+            "Retry-After": String(retryAfterSeconds),
+          },
+        }
+      );
+    }
+
+    /*
+     * Only after authentication and rate limiting succeed do we check
+     * OpenAI configuration and potentially spend OpenAI API credits.
      */
     if (!process.env.OPENAI_API_KEY) {
       console.error(

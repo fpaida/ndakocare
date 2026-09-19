@@ -172,6 +172,15 @@ export default function NiaPage() {
         return;
       }
 
+      if (response.status === 429) {
+        setError(
+          isFr
+            ? "Vous avez atteint la limite de demandes à Nia. Veuillez patienter quelques minutes avant de réessayer."
+            : "You have reached Nia's request limit. Please wait a few minutes before trying again."
+        );
+        return;
+      }
+
       if (!response.ok) {
         throw new Error(
           typeof data?.error === "string"
