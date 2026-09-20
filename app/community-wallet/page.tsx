@@ -1,16 +1,64 @@
+
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Navbar from "../components/Navbar";
 import { supabase } from "../lib/supabase";
 import { useLanguage } from "../context/LanguageContext";
 
+const SUPPORTED_CURRENCIES = [
+  "USD",
+  "EUR",
+  "XAF",
+  "XOF",
+  "CDF",
+  "NGN",
+  "KES",
+  "GHS",
+  "ZAR",
+] as const;
+
+type SupportedCurrency =
+  (typeof SUPPORTED_CURRENCIES)[number];
+
+type Community = {
+  id: string;
+  owner_id: string;
+  name: string;
+  description: string | null;
+  balance: number | string | null;
+  preferred_currency: string;
+  visibility: string;
+  status: string;
+  created_at: string;
+};
+
+function formatMoney(
+  amount: number,
+  currency: string
+): string {
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency,
+      currencyDisplay: "code",
+    }).format(amount);
+  } catch {
+    return `${amount.toFixed(2)} ${currency}`;
+  }
+}
+
 export default function CommunityWalletPage() {
   const { language } = useLanguage();
+  const isFrench = language === "fr";
 
-  const [walletBalance, setWalletBalance] = useState(0);
+  const [userId, setUserId] = useState<string | null>(
+    null
+  );
 
-  const [communities, setCommunities] = useState<any[]>([]);
+  const [communities, setCommunities] = useState<
+    Community[]
+  >([]);
 
   const [communityName, setCommunityName] =
     useState("");
@@ -18,329 +66,499 @@ export default function CommunityWalletPage() {
   const [description, setDescription] =
     useState("");
 
-  useEffect(() => {
-    loadData();
-  }, []);
+  const [preferredCurrency, setPreferredCurrency] =
+    useState<SupportedCurrency>("USD");
 
-  const loadData = async () => {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
 
-    if (!session) return;
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
 
-    const { data: wallet } = await supabase
-      .from("wallets")
-      .select("balance")
-      .eq("user_id", session.user.id)
-      .single();
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setError("");
 
-    if (wallet) {
-      setWalletBalance(Number(wallet.balance));
-    }
+    try {
+      const {
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
 
-    const { data: communitiesData } =
-      await supabase
+      if (authError) {
+        throw authError;
+      }
+
+      if (!user) {
+        setUserId(null);
+        setCommunities([]);
+        return;
+      }
+
+      setUserId(user.id);
+
+      // Migration 005 RLS returns communities
+      // owned by this user or accessible through
+      // active community membership.
+
+      const {
+        data,
+        error: communitiesError,
+      } = await supabase
         .from("community_wallets")
-        .select("*")
-        .eq("owner_id", session.user.id)
+        .select(
+          "id, owner_id, name, description, balance, preferred_currency, visibility, status, created_at"
+        )
         .order("created_at", {
           ascending: false,
         });
 
-    setCommunities(communitiesData || []);
-  };
+      if (communitiesError) {
+        throw communitiesError;
+      }
+
+      setCommunities(
+        (data ?? []) as Community[]
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : isFrench
+            ? "Impossible de charger les communautés."
+            : "Unable to load communities."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [isFrench]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
 
   const createCommunity = async () => {
-    if (!communityName) {
-      alert(
-        language === "fr"
-          ? "Nom requis"
-          : "Community name required"
+    const name = communityName.trim();
+
+    setError("");
+    setMessage("");
+
+    if (!name) {
+      setError(
+        isFrench
+          ? "Le nom de la communauté est requis."
+          : "Community name is required."
       );
       return;
     }
 
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
+    if (!userId) {
+      setError(
+        isFrench
+          ? "Connectez-vous pour créer une communauté."
+          : "Sign in to create a community."
+      );
+      return;
+    }
 
-    if (!session) return;
+    setCreating(true);
 
-    await supabase
-      .from("community_wallets")
-      .insert([
-        {
-          owner_id: session.user.id,
-          name: communityName,
-          description,
+    try {
+      const {
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
+
+      if (authError) {
+        throw authError;
+      }
+
+      if (!user || user.id !== userId) {
+        throw new Error(
+          isFrench
+            ? "Votre session a expiré. Reconnectez-vous."
+            : "Your session has expired. Please sign in again."
+        );
+      }
+
+      const {
+        error: insertError,
+      } = await supabase
+        .from("community_wallets")
+        .insert({
+          owner_id: user.id,
+          name,
+          description: description.trim() || null,
           balance: 0,
-        },
-      ]);
+          preferred_currency: preferredCurrency,
+          visibility: "private",
+          status: "active",
+        });
 
-    setCommunityName("");
-    setDescription("");
+      if (insertError) {
+        throw insertError;
+      }
 
-    loadData();
-  };
+      setCommunityName("");
+      setDescription("");
+      setPreferredCurrency("USD");
 
-  const contribute = async (
-    communityId: string,
-    amount: number
-  ) => {
-    if (walletBalance < amount) {
-      alert(
-        language === "fr"
-          ? "Solde insuffisant"
-          : "Insufficient wallet balance"
+      setMessage(
+        isFrench
+          ? "Communauté privée créée avec succès."
+          : "Private community created successfully."
       );
-      return;
+
+      await loadData();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : isFrench
+            ? "Impossible de créer la communauté."
+            : "Unable to create the community."
+      );
+    } finally {
+      setCreating(false);
     }
-
-    const community =
-      communities.find(
-        (c) => c.id === communityId
-      );
-
-    if (!community) return;
-
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-
-    if (!session) return;
-
-    const newWalletBalance =
-      walletBalance - amount;
-
-    // Update user wallet
-    await supabase
-      .from("wallets")
-      .update({
-        balance: newWalletBalance,
-      })
-      .eq("user_id", session.user.id);
-
-    // Update community balance
-    await supabase
-      .from("community_wallets")
-      .update({
-        balance:
-          Number(community.balance) +
-          amount,
-      })
-      .eq("id", communityId);
-
-    // Save contribution
-    await supabase
-      .from("community_contributions")
-      .insert([
-        {
-          wallet_id: communityId,
-          user_id: session.user.id,
-          amount,
-        },
-      ]);
-
-    // Activity Center
-    await supabase
-      .from("wallet_transactions")
-      .insert([
-        {
-          user_id: session.user.id,
-          transaction_type:
-            "Community Contribution",
-          amount,
-          currency: "USD",
-          description:
-            `Contribution to ${community.name}`,
-        },
-      ]);
-
-    // Notification
-    await supabase
-      .from("notifications")
-      .insert([
-        {
-          user_id: session.user.id,
-          title:
-            language === "fr"
-              ? "Contribution réussie"
-              : "Contribution Successful",
-
-          message:
-            language === "fr"
-              ? `${amount}$ ajouté à ${community.name}`
-              : `$${amount} contributed to ${community.name}`,
-        },
-      ]);
-
-    alert(
-      language === "fr"
-        ? "Contribution effectuée"
-        : "Contribution completed"
-    );
-
-    loadData();
   };
 
   return (
     <>
       <Navbar />
 
-      <div className="min-h-screen bg-gray-100 p-8">
-
-        <div className="max-w-6xl mx-auto">
+      <main className="min-h-screen bg-gray-100 px-4 py-8 sm:px-8">
+        <div className="mx-auto max-w-6xl space-y-8">
 
           {/* Header */}
 
-          <div className="bg-white rounded-3xl shadow-lg p-8 mb-8">
+          <section className="rounded-3xl bg-white p-6 shadow-lg sm:p-8">
+            <div className="mb-3 inline-flex rounded-full bg-green-100 px-4 py-2 text-sm font-semibold text-green-800">
+              {isFrench
+                ? "Communautés privées"
+                : "Private communities"}
+            </div>
 
-            <h1 className="text-4xl font-bold text-green-700 mb-4">
+            <h1 className="text-3xl font-bold text-green-800 sm:text-4xl">
               🌍 Community Wallet
             </h1>
 
-            <p className="text-gray-600">
-              {language === "fr"
-                ? "Gérez vos communautés et contributions."
-                : "Manage your communities and contributions."}
+            <p className="mt-4 max-w-3xl text-gray-600">
+              {isFrench
+                ? "Créez une communauté, choisissez sa devise et préparez un espace de soutien collectif."
+                : "Create a community, choose its currency, and prepare a shared space for collective support."}
             </p>
 
-            <div className="mt-4 text-2xl font-bold text-green-700">
-              Wallet Balance:
-              ${walletBalance.toFixed(2)}
+            <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+              <p className="font-semibold">
+                {isFrench
+                  ? "Les contributions ne sont pas encore disponibles"
+                  : "Contributions are not available yet"}
+              </p>
+
+              <p className="mt-2">
+                {isFrench
+                  ? "Le traitement des paiements, la conversion des devises et la confirmation des fonds seront activés après l'intégration d'un partenaire financier autorisé."
+                  : "Payment processing, currency conversion, and confirmation of funds will be enabled after integration with an appropriately licensed financial partner."}
+              </p>
             </div>
+          </section>
 
-          </div>
+          {/* Messages */}
 
-          {/* Create Community */}
+          {error && (
+            <div
+              role="alert"
+              className="rounded-2xl border border-red-200 bg-red-50 p-4 text-red-800"
+            >
+              {error}
+            </div>
+          )}
 
-          <div className="bg-white rounded-3xl shadow-lg p-8 mb-8">
+          {message && (
+            <div
+              role="status"
+              className="rounded-2xl border border-green-200 bg-green-50 p-4 text-green-800"
+            >
+              {message}
+            </div>
+          )}
 
-            <h2 className="text-2xl font-bold mb-4">
-              {language === "fr"
-                ? "Créer une Communauté"
-                : "Create Community"}
+          {/* Create community */}
+
+          <section className="rounded-3xl bg-white p-6 shadow-lg sm:p-8">
+            <h2 className="text-2xl font-bold text-gray-900">
+              {isFrench
+                ? "Créer une communauté"
+                : "Create a community"}
             </h2>
 
-            <input
-              type="text"
-              placeholder={
-                language === "fr"
-                  ? "Nom de la communauté"
-                  : "Community Name"
-              }
-              value={communityName}
-              onChange={(e) =>
-                setCommunityName(
-                  e.target.value
-                )
-              }
-              className="w-full border p-3 rounded-xl mb-4"
-            />
+            <p className="mt-2 text-sm text-gray-600">
+              {isFrench
+                ? "Les nouvelles communautés sont privées. Les invitations seront disponibles dans une prochaine étape."
+                : "New communities are private. Invitations will be available in a later stage."}
+            </p>
 
-            <textarea
-              placeholder={
-                language === "fr"
-                  ? "Description"
-                  : "Description"
-              }
-              value={description}
-              onChange={(e) =>
-                setDescription(
-                  e.target.value
-                )
-              }
-              className="w-full border p-3 rounded-xl mb-4"
-            />
+            <div className="mt-6 space-y-5">
+              <div>
+                <label
+                  htmlFor="community-name"
+                  className="mb-2 block font-semibold text-gray-800"
+                >
+                  {isFrench
+                    ? "Nom de la communauté"
+                    : "Community name"}
+                </label>
 
-            <button
-              onClick={createCommunity}
-              className="bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-xl"
-            >
-              {language === "fr"
-                ? "Créer"
-                : "Create"}
-            </button>
+                <input
+                  id="community-name"
+                  type="text"
+                  maxLength={120}
+                  value={communityName}
+                  onChange={(event) =>
+                    setCommunityName(event.target.value)
+                  }
+                  placeholder={
+                    isFrench
+                      ? "Ex. : Soutien scolaire à Bangui"
+                      : "e.g. Bangui Education Support"
+                  }
+                  className="w-full rounded-xl border border-gray-300 p-3 text-gray-900 focus:border-green-600 focus:outline-none"
+                />
+              </div>
 
-          </div>
+              <div>
+                <label
+                  htmlFor="community-description"
+                  className="mb-2 block font-semibold text-gray-800"
+                >
+                  {isFrench
+                    ? "Description"
+                    : "Description"}
+                </label>
+
+                <textarea
+                  id="community-description"
+                  rows={4}
+                  maxLength={1000}
+                  value={description}
+                  onChange={(event) =>
+                    setDescription(event.target.value)
+                  }
+                  placeholder={
+                    isFrench
+                      ? "Décrivez le but de cette communauté."
+                      : "Describe the purpose of this community."
+                  }
+                  className="w-full rounded-xl border border-gray-300 p-3 text-gray-900 focus:border-green-600 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="preferred-currency"
+                  className="mb-2 block font-semibold text-gray-800"
+                >
+                  {isFrench
+                    ? "Devise préférée de la communauté"
+                    : "Community preferred currency"}
+                </label>
+
+                <select
+                  id="preferred-currency"
+                  value={preferredCurrency}
+                  onChange={(event) =>
+                    setPreferredCurrency(
+                      event.target.value as SupportedCurrency
+                    )
+                  }
+                  className="w-full rounded-xl border border-gray-300 bg-white p-3 text-gray-900 focus:border-green-600 focus:outline-none"
+                >
+                  {SUPPORTED_CURRENCIES.map(
+                    (currency) => (
+                      <option
+                        key={currency}
+                        value={currency}
+                      >
+                        {currency}
+                      </option>
+                    )
+                  )}
+                </select>
+
+                <p className="mt-2 text-sm text-gray-500">
+                  {isFrench
+                    ? "La disponibilité des paiements et du change dépendra du partenaire financier."
+                    : "Payment and FX availability will depend on the financial partner."}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  void createCommunity();
+                }}
+                disabled={
+                  creating ||
+                  loading ||
+                  !userId
+                }
+                className="rounded-xl bg-green-700 px-6 py-3 font-semibold text-white transition hover:bg-green-800 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {creating
+                  ? isFrench
+                    ? "Création..."
+                    : "Creating..."
+                  : isFrench
+                    ? "Créer la communauté"
+                    : "Create community"}
+              </button>
+            </div>
+          </section>
 
           {/* Communities */}
 
-          <div className="grid md:grid-cols-2 gap-6">
+          <section>
+            <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-2xl font-bold text-gray-900">
+                {isFrench
+                  ? "Mes communautés"
+                  : "My communities"}
+              </h2>
 
-            {communities.map(
-              (community) => (
-                <div
-                  key={community.id}
-                  className="bg-white rounded-3xl shadow-lg p-6"
-                >
-                  <h3 className="text-2xl font-bold text-green-700">
-                    {community.name}
-                  </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  void loadData();
+                }}
+                disabled={loading}
+                className="rounded-xl border border-green-700 px-4 py-2 font-semibold text-green-800 hover:bg-green-50 disabled:opacity-50"
+              >
+                {isFrench
+                  ? "Actualiser"
+                  : "Refresh"}
+              </button>
+            </div>
 
-                  <p className="text-gray-600 mt-2">
-                    {
-                      community.description
-                    }
-                  </p>
+            {loading ? (
+              <div className="rounded-3xl bg-white p-8 text-gray-600 shadow-lg">
+                {isFrench
+                  ? "Chargement des communautés..."
+                  : "Loading communities..."}
+              </div>
+            ) : !userId ? (
+              <div className="rounded-3xl bg-white p-8 text-gray-600 shadow-lg">
+                {isFrench
+                  ? "Connectez-vous pour consulter vos communautés."
+                  : "Sign in to view your communities."}
+              </div>
+            ) : communities.length === 0 ? (
+              <div className="rounded-3xl bg-white p-8 text-gray-600 shadow-lg">
+                {isFrench
+                  ? "Aucune communauté pour le moment. Créez votre première communauté ci-dessus."
+                  : "No communities yet. Create your first community above."}
+              </div>
+            ) : (
+              <div className="grid gap-6 md:grid-cols-2">
+                {communities.map((community) => {
+                  const isOwner =
+                    community.owner_id === userId;
 
-                  <div className="mt-4 text-3xl font-bold">
-                    $
-                    {Number(
-                      community.balance
-                    ).toFixed(2)}
-                  </div>
+                  const balance = Number(
+                    community.balance ?? 0
+                  );
 
-                  <div className="grid grid-cols-3 gap-2 mt-6">
-
-                    <button
-                      onClick={() =>
-                        contribute(
-                          community.id,
-                          10
-                        )
-                      }
-                      className="bg-green-600 text-white p-3 rounded-xl"
+                  return (
+                    <article
+                      key={community.id}
+                      className="rounded-3xl bg-white p-6 shadow-lg"
                     >
-                      +$10
-                    </button>
+                      <div className="mb-4 flex flex-wrap gap-2">
+                        <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-800">
+                          {isOwner
+                            ? isFrench
+                              ? "Propriétaire"
+                              : "Owner"
+                            : isFrench
+                              ? "Membre"
+                              : "Member"}
+                        </span>
 
-                    <button
-                      onClick={() =>
-                        contribute(
-                          community.id,
-                          25
-                        )
-                      }
-                      className="bg-blue-600 text-white p-3 rounded-xl"
-                    >
-                      +$25
-                    </button>
+                        <span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-800">
+                          {community.preferred_currency}
+                        </span>
 
-                    <button
-                      onClick={() =>
-                        contribute(
-                          community.id,
-                          50
-                        )
-                      }
-                      className="bg-purple-600 text-white p-3 rounded-xl"
-                    >
-                      +$50
-                    </button>
+                        <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-semibold text-gray-700">
+                          {isFrench
+                            ? "Privée"
+                            : "Private"}
+                        </span>
+                      </div>
 
-                  </div>
+                      <h3 className="text-2xl font-bold text-green-800">
+                        {community.name}
+                      </h3>
 
-                </div>
-              )
+                      {community.description && (
+                        <p className="mt-3 whitespace-pre-wrap text-gray-600">
+                          {community.description}
+                        </p>
+                      )}
+
+                      <div className="mt-6 rounded-2xl bg-gray-50 p-5">
+                        <p className="text-sm font-semibold text-gray-600">
+                          {isFrench
+                            ? "Solde communautaire enregistré"
+                            : "Recorded community balance"}
+                        </p>
+
+                        <p className="mt-2 break-words text-2xl font-bold text-gray-900 sm:text-3xl">
+                          {formatMoney(
+                            Number.isFinite(balance)
+                              ? balance
+                              : 0,
+                            community.preferred_currency
+                          )}
+                        </p>
+
+                        <p className="mt-2 text-xs text-gray-500">
+                          {isFrench
+                            ? "Ce montant ne constitue pas une confirmation de fonds détenus par NdakoCare."
+                            : "This amount does not represent funds held by NdakoCare."}
+                        </p>
+                      </div>
+
+                      <div className="mt-6 rounded-2xl border border-dashed border-gray-300 p-4">
+                        <p className="font-semibold text-gray-800">
+                          {isFrench
+                            ? "Contributions"
+                            : "Contributions"}
+                        </p>
+
+                        <p className="mt-2 text-sm text-gray-600">
+                          {isFrench
+                            ? "Bientôt disponibles après l'intégration du partenaire financier et la vérification des paiements."
+                            : "Coming after financial-partner integration and verified payment confirmation."}
+                        </p>
+
+                        <button
+                          type="button"
+                          disabled
+                          className="mt-4 w-full cursor-not-allowed rounded-xl bg-gray-300 px-5 py-3 font-semibold text-gray-600"
+                        >
+                          {isFrench
+                            ? "Contribuer — bientôt disponible"
+                            : "Contribute — coming soon"}
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
             )}
-
-          </div>
-
+          </section>
         </div>
-
-      </div>
+      </main>
     </>
   );
 }
