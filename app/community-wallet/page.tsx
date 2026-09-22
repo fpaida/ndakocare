@@ -1,7 +1,11 @@
-
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useState,
+} from "react";
+
 import Navbar from "../components/Navbar";
 import { supabase } from "../lib/supabase";
 import { useLanguage } from "../context/LanguageContext";
@@ -33,6 +37,36 @@ type Community = {
   created_at: string;
 };
 
+type InvitationMethod = "email" | "whatsapp" | "sms";
+
+type InvitationResponse = {
+  success?: boolean;
+  invitationPath?: string;
+  expiresAt?: string;
+  error?: string;
+};
+
+type InvitationLink = {
+  walletId: string;
+  url: string;
+  expiresAt: string;
+  method: InvitationMethod;
+  recipientName: string;
+  recipientEmail: string | null;
+  recipientPhone: string | null;
+  communityName: string;
+};
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PHONE_PATTERN = /^\+[1-9][0-9]{1,14}$/;
+
+function invitationMessage(link: InvitationLink, isFrench: boolean): string {
+  const greeting = link.recipientName ? `${link.recipientName}, ` : "";
+  return isFrench
+    ? `${greeting}vous êtes invité(e) à rejoindre la communauté privée « ${link.communityName} » sur NdakoCare. Ouvrez ce lien pour vous connecter et accepter l'invitation (valable 7 jours, usage unique) : ${link.url}`
+    : `${greeting}you are invited to join the private community "${link.communityName}" on NdakoCare. Open this link to sign in and accept the invitation (valid for 7 days, one-time use): ${link.url}`;
+}
+
 function formatMoney(
   amount: number,
   currency: string
@@ -52,13 +86,11 @@ export default function CommunityWalletPage() {
   const { language } = useLanguage();
   const isFrench = language === "fr";
 
-  const [userId, setUserId] = useState<string | null>(
-    null
-  );
+  const [userId, setUserId] =
+    useState<string | null>(null);
 
-  const [communities, setCommunities] = useState<
-    Community[]
-  >([]);
+  const [communities, setCommunities] =
+    useState<Community[]>([]);
 
   const [communityName, setCommunityName] =
     useState("");
@@ -66,11 +98,30 @@ export default function CommunityWalletPage() {
   const [description, setDescription] =
     useState("");
 
-  const [preferredCurrency, setPreferredCurrency] =
-    useState<SupportedCurrency>("USD");
+  const [
+    preferredCurrency,
+    setPreferredCurrency,
+  ] = useState<SupportedCurrency>("USD");
 
-  const [loading, setLoading] = useState(true);
-  const [creating, setCreating] = useState(false);
+  const [loading, setLoading] =
+    useState(true);
+
+  const [creating, setCreating] =
+    useState(false);
+
+  const [invitingWalletId, setInvitingWalletId] =
+    useState<string | null>(null);
+
+  const [invitationLink, setInvitationLink] =
+    useState<InvitationLink | null>(null);
+
+  const [invitationMethod, setInvitationMethod] =
+    useState<InvitationMethod>("email");
+  const [recipientName, setRecipientName] = useState("");
+  const [recipientEmail, setRecipientEmail] = useState("");
+  const [recipientPhone, setRecipientPhone] = useState("");
+  const [activeInviteForm, setActiveInviteForm] =
+    useState<string | null>(null);
 
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -92,6 +143,7 @@ export default function CommunityWalletPage() {
       if (!user) {
         setUserId(null);
         setCommunities([]);
+        setInvitationLink(null);
         return;
       }
 
@@ -188,9 +240,11 @@ export default function CommunityWalletPage() {
         .insert({
           owner_id: user.id,
           name,
-          description: description.trim() || null,
+          description:
+            description.trim() || null,
           balance: 0,
-          preferred_currency: preferredCurrency,
+          preferred_currency:
+            preferredCurrency,
           visibility: "private",
           status: "active",
         });
@@ -220,6 +274,190 @@ export default function CommunityWalletPage() {
       );
     } finally {
       setCreating(false);
+    }
+  };
+
+  const generateInvitation = async (
+    community: Community
+  ) => {
+    setError("");
+    setMessage("");
+    setInvitationLink(null);
+
+    if (
+      !userId ||
+      community.owner_id !== userId
+    ) {
+      setError(
+        isFrench
+          ? "Seul le propriétaire peut inviter des membres."
+          : "Only the owner can invite members."
+      );
+      return;
+    }
+
+    const normalizedEmail = recipientEmail.trim().toLowerCase();
+    const normalizedPhone = recipientPhone.trim();
+    const normalizedName = recipientName.trim();
+
+    if (normalizedName.length > 120) {
+      setError(isFrench ? "Nom du destinataire trop long." : "Recipient name is too long.");
+      return;
+    }
+
+    if (invitationMethod === "email") {
+      if (normalizedEmail.length > 254 || !EMAIL_PATTERN.test(normalizedEmail)) {
+        setError(isFrench ? "Saisissez une adresse e-mail valide." : "Enter a valid email address.");
+        return;
+      }
+    } else if (!PHONE_PATTERN.test(normalizedPhone)) {
+      setError(isFrench
+        ? "Saisissez un numéro international, par exemple +23675000000."
+        : "Enter an international phone number, such as +23675000000.");
+      return;
+    }
+
+    setInvitingWalletId(community.id);
+
+    try {
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
+
+      if (
+        sessionError ||
+        !session?.access_token
+      ) {
+        throw new Error(
+          isFrench
+            ? "Votre session a expiré. Reconnectez-vous."
+            : "Your session has expired. Please sign in again."
+        );
+      }
+
+      const response = await fetch(
+        "/api/community/invitations",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+            Authorization:
+              `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            walletId: community.id,
+            invitationMethod,
+            recipientName: normalizedName,
+            ...(invitationMethod === "email"
+              ? { recipientEmail: normalizedEmail }
+              : { recipientPhone: normalizedPhone }),
+          }),
+          cache: "no-store",
+        }
+      );
+
+      const result =
+        (await response.json()) as
+          InvitationResponse;
+
+      if (
+        !response.ok ||
+        !result.success ||
+        !result.invitationPath ||
+        !result.expiresAt
+      ) {
+        throw new Error(
+          result.error ||
+            (isFrench
+              ? "Impossible de créer l'invitation."
+              : "Unable to create the invitation.")
+        );
+      }
+
+      const url = new URL(
+        result.invitationPath,
+        window.location.origin
+      );
+
+      // Accept only an invitation path within
+      // the current NdakoCare application.
+
+      if (
+        url.origin !==
+          window.location.origin ||
+        url.pathname !==
+          "/community-wallet/invite"
+      ) {
+        throw new Error(
+          "Invalid invitation response."
+        );
+      }
+
+      setInvitationLink({
+        walletId: community.id,
+        url: url.toString(),
+        expiresAt: result.expiresAt,
+        method: invitationMethod,
+        recipientName: normalizedName,
+        recipientEmail: invitationMethod === "email" ? normalizedEmail : null,
+        recipientPhone: invitationMethod === "email" ? null : normalizedPhone,
+        communityName: community.name,
+      });
+
+      setMessage(
+        isFrench
+          ? "Invitation créée. Aucun message n'a été envoyé automatiquement."
+          : "Invitation created. No message has been sent automatically."
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : isFrench
+            ? "Impossible de créer l'invitation."
+            : "Unable to create the invitation."
+      );
+    } finally {
+      setInvitingWalletId(null);
+    }
+  };
+
+  const copyInvitation = async () => {
+    if (!invitationLink) {
+      return;
+    }
+
+    setError("");
+
+    try {
+      await navigator.clipboard.writeText(
+        invitationLink.url
+      );
+
+      setMessage(
+        isFrench
+          ? "Lien d'invitation copié."
+          : "Invitation link copied."
+      );
+    } catch {
+      setError(
+        isFrench
+          ? "Copie impossible. Sélectionnez le lien et copiez-le manuellement."
+          : "Unable to copy automatically. Select the link and copy it manually."
+      );
+    }
+  };
+
+  const copyInvitationMessage = async () => {
+    if (!invitationLink) return;
+    setError("");
+    try {
+      await navigator.clipboard.writeText(invitationMessage(invitationLink, isFrench));
+      setMessage(isFrench ? "Message copié. Envoyez-le au destinataire." : "Message copied. Send it to the recipient.");
+    } catch {
+      setError(isFrench ? "Copie impossible. Copiez le lien manuellement." : "Unable to copy. Copy the link manually.");
     }
   };
 
@@ -295,8 +533,8 @@ export default function CommunityWalletPage() {
 
             <p className="mt-2 text-sm text-gray-600">
               {isFrench
-                ? "Les nouvelles communautés sont privées. Les invitations seront disponibles dans une prochaine étape."
-                : "New communities are private. Invitations will be available in a later stage."}
+                ? "Les nouvelles communautés sont privées. Le propriétaire peut inviter des membres à rejoindre sa communauté."
+                : "New communities are private. The owner can invite members to join."}
             </p>
 
             <div className="mt-6 space-y-5">
@@ -316,7 +554,9 @@ export default function CommunityWalletPage() {
                   maxLength={120}
                   value={communityName}
                   onChange={(event) =>
-                    setCommunityName(event.target.value)
+                    setCommunityName(
+                      event.target.value
+                    )
                   }
                   placeholder={
                     isFrench
@@ -343,7 +583,9 @@ export default function CommunityWalletPage() {
                   maxLength={1000}
                   value={description}
                   onChange={(event) =>
-                    setDescription(event.target.value)
+                    setDescription(
+                      event.target.value
+                    )
                   }
                   placeholder={
                     isFrench
@@ -468,6 +710,12 @@ export default function CommunityWalletPage() {
                     community.balance ?? 0
                   );
 
+                  const currentInvitation =
+                    invitationLink?.walletId ===
+                    community.id
+                      ? invitationLink
+                      : null;
+
                   return (
                     <article
                       key={community.id}
@@ -527,6 +775,214 @@ export default function CommunityWalletPage() {
                             : "This amount does not represent funds held by NdakoCare."}
                         </p>
                       </div>
+
+                      {/* Owner-only invitations */}
+
+                      {isOwner &&
+                        community.status ===
+                          "active" && (
+                          <div className="mt-6 rounded-2xl border border-green-200 bg-green-50 p-5">
+                            <h4 className="text-lg font-bold text-green-900">
+                              {isFrench
+                                ? "Inviter des membres"
+                                : "Invite Members"}
+                            </h4>
+
+                            <p className="mt-2 text-sm text-green-900">
+                              {isFrench
+                                ? "Invitez une personne par e-mail, WhatsApp ou SMS. Le lien privé expire après 7 jours et ne peut être accepté qu'une fois."
+                                : "Invite someone by email, WhatsApp, or SMS. The private link expires after 7 days and can be accepted only once."}
+                            </p>
+
+                            {activeInviteForm !== community.id ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActiveInviteForm(community.id);
+                                  setInvitationLink(null);
+                                  setRecipientName("");
+                                  setRecipientEmail("");
+                                  setRecipientPhone("");
+                                  setInvitationMethod("email");
+                                  setError("");
+                                  setMessage("");
+                                }}
+                                className="mt-4 rounded-xl bg-green-700 px-5 py-3 font-semibold text-white hover:bg-green-800"
+                              >
+                                {isFrench ? "Inviter une personne" : "Invite a person"}
+                              </button>
+                            ) : (
+                              <div className="mt-4 space-y-4">
+                                <div>
+                                  <label htmlFor={`invite-method-${community.id}`} className="mb-2 block text-sm font-semibold text-gray-800">
+                                    {isFrench ? "Méthode d'invitation" : "Invitation method"}
+                                  </label>
+                                  <select
+                                    id={`invite-method-${community.id}`}
+                                    value={invitationMethod}
+                                    onChange={(event) => {
+                                      setInvitationMethod(event.target.value as InvitationMethod);
+                                      setInvitationLink(null);
+                                    }}
+                                    disabled={invitingWalletId !== null}
+                                    className="w-full rounded-xl border border-gray-300 bg-white p-3 text-gray-900"
+                                  >
+                                    <option value="email">Email</option>
+                                    <option value="whatsapp">WhatsApp</option>
+                                    <option value="sms">SMS</option>
+                                  </select>
+                                </div>
+
+                                <div>
+                                  <label htmlFor={`invite-name-${community.id}`} className="mb-2 block text-sm font-semibold text-gray-800">
+                                    {isFrench ? "Nom du destinataire (facultatif)" : "Recipient name (optional)"}
+                                  </label>
+                                  <input
+                                    id={`invite-name-${community.id}`}
+                                    type="text"
+                                    maxLength={120}
+                                    autoComplete="off"
+                                    value={recipientName}
+                                    onChange={(event) => {
+                                      setRecipientName(event.target.value);
+                                      setInvitationLink(null);
+                                    }}
+                                    disabled={invitingWalletId !== null}
+                                    placeholder={isFrench ? "Ex. : Marie" : "e.g. Marie"}
+                                    className="w-full rounded-xl border border-gray-300 bg-white p-3 text-gray-900"
+                                  />
+                                </div>
+
+                                {invitationMethod === "email" ? (
+                                  <div>
+                                    <label htmlFor={`invite-email-${community.id}`} className="mb-2 block text-sm font-semibold text-gray-800">
+                                      {isFrench ? "E-mail du destinataire" : "Recipient email"}
+                                    </label>
+                                    <input
+                                      id={`invite-email-${community.id}`}
+                                      type="email"
+                                      maxLength={254}
+                                      autoComplete="off"
+                                      value={recipientEmail}
+                                      onChange={(event) => {
+                                        setRecipientEmail(event.target.value);
+                                        setInvitationLink(null);
+                                      }}
+                                      disabled={invitingWalletId !== null}
+                                      placeholder="marie@example.com"
+                                      className="w-full rounded-xl border border-gray-300 bg-white p-3 text-gray-900"
+                                    />
+                                    <p className="mt-2 text-xs text-gray-600">
+                                      {isFrench
+                                        ? "Seul un compte NdakoCare avec cet e-mail vérifié peut accepter l'invitation. L'e-mail n'est pas envoyé automatiquement."
+                                        : "Only a NdakoCare account with this verified email can accept. Email is not sent automatically."}
+                                    </p>
+                                  </div>
+                                ) : (
+                                  <div>
+                                    <label htmlFor={`invite-phone-${community.id}`} className="mb-2 block text-sm font-semibold text-gray-800">
+                                      {isFrench ? "Numéro avec indicatif international" : "Phone number with country code"}
+                                    </label>
+                                    <input
+                                      id={`invite-phone-${community.id}`}
+                                      type="tel"
+                                      autoComplete="off"
+                                      value={recipientPhone}
+                                      onChange={(event) => {
+                                        setRecipientPhone(event.target.value);
+                                        setInvitationLink(null);
+                                      }}
+                                      disabled={invitingWalletId !== null}
+                                      placeholder="+23675000000"
+                                      className="w-full rounded-xl border border-gray-300 bg-white p-3 text-gray-900"
+                                    />
+                                    <p className="mt-2 text-xs text-amber-900">
+                                      {isFrench
+                                        ? "Le numéro n'est pas vérifié. Toute personne connectée possédant le lien peut tenter de l'accepter."
+                                        : "Phone ownership is not verified. Any signed-in person with the link can attempt to accept it."}
+                                    </p>
+                                  </div>
+                                )}
+
+                                <button
+                                  type="button"
+                                  onClick={() => { void generateInvitation(community); }}
+                                  disabled={invitingWalletId !== null}
+                                  className="rounded-xl bg-green-700 px-5 py-3 font-semibold text-white hover:bg-green-800 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  {invitingWalletId === community.id
+                                    ? (isFrench ? "Création..." : "Generating...")
+                                    : (isFrench ? "Créer l'invitation" : "Generate invitation")}
+                                </button>
+                              </div>
+                            )}
+
+                            {currentInvitation && (
+                              <div className="mt-5 rounded-xl border border-green-200 bg-white p-4">
+                                <p className="text-sm font-semibold text-gray-800">
+                                  {isFrench ? "Invitation créée — non envoyée" : "Invitation created — not sent"}
+                                </p>
+                                <p className="mt-2 text-sm text-gray-700">
+                                  {currentInvitation.method === "email"
+                                    ? currentInvitation.recipientEmail
+                                    : currentInvitation.recipientPhone}
+                                </p>
+                                <label htmlFor={`invitation-${community.id}`} className="mt-3 block text-sm font-semibold text-gray-800">
+                                  {isFrench ? "Lien privé" : "Private link"}
+                                </label>
+                                <input
+                                  id={`invitation-${community.id}`}
+                                  type="text"
+                                  readOnly
+                                  value={currentInvitation.url}
+                                  onFocus={(event) => event.currentTarget.select()}
+                                  className="mt-2 w-full rounded-lg border border-gray-300 p-3 text-sm text-gray-900"
+                                />
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => { void copyInvitation(); }}
+                                    className="rounded-xl border border-green-700 px-4 py-2 font-semibold text-green-800 hover:bg-green-50"
+                                  >
+                                    {isFrench ? "Copier le lien" : "Copy link"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => { void copyInvitationMessage(); }}
+                                    className="rounded-xl border border-green-700 px-4 py-2 font-semibold text-green-800 hover:bg-green-50"
+                                  >
+                                    {isFrench ? "Copier le message" : "Copy message"}
+                                  </button>
+                                  {currentInvitation.method === "whatsapp" && currentInvitation.recipientPhone && (
+                                    <a
+                                      href={`https://wa.me/${currentInvitation.recipientPhone.slice(1)}?text=${encodeURIComponent(invitationMessage(currentInvitation, isFrench))}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="rounded-xl bg-green-700 px-4 py-2 font-semibold text-white hover:bg-green-800"
+                                    >
+                                      {isFrench ? "Ouvrir WhatsApp" : "Open WhatsApp"}
+                                    </a>
+                                  )}
+                                </div>
+                                <p className="mt-3 text-xs text-gray-600">
+                                  {isFrench ? "Expiration : " : "Expires: "}
+                                  {new Date(currentInvitation.expiresAt).toLocaleString(isFrench ? "fr-FR" : "en-US")}
+                                </p>
+                                <p className="mt-2 text-xs font-medium text-amber-800">
+                                  {currentInvitation.method === "email"
+                                    ? (isFrench
+                                      ? "Partagez ce lien uniquement avec le destinataire indiqué. Son compte doit avoir le même e-mail vérifié."
+                                      : "Share only with the named recipient. Their account must have the matching verified email.")
+                                    : (isFrench
+                                      ? "Ne publiez pas ce lien : le numéro de téléphone n'est pas vérifié lors de l'acceptation."
+                                      : "Do not post this link publicly: phone ownership is not verified at acceptance.")}
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                      {/* Contributions remain disabled */}
 
                       <div className="mt-6 rounded-2xl border border-dashed border-gray-300 p-4">
                         <p className="font-semibold text-gray-800">
